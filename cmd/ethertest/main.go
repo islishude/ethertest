@@ -43,8 +43,7 @@ func commonFlags() []cli.Flag {
 		&cli.StringFlag{Name: "config", Usage: "strict TOML configuration file"},
 		&cli.Uint64Flag{Name: "chain-id"},
 		&cli.Int64Flag{Name: "genesis-time"},
-		&cli.StringFlag{Name: "http", Usage: "EL HTTP+WS listen address"},
-		&cli.StringFlag{Name: "beacon", Usage: "Beacon REST+SSE listen address"},
+		&cli.StringFlag{Name: "http", Usage: "shared HTTP+WS listen address"},
 		&cli.BoolFlag{Name: "no-http"},
 		&cli.BoolFlag{Name: "no-beacon"},
 		&cli.BoolFlag{Name: "allow-unsafe-external"},
@@ -67,17 +66,14 @@ func effectiveConfig(ctx *cli.Context) (ethertest.Config, error) {
 	if ctx.IsSet("http") {
 		cfg.HTTP.Address = ctx.String("http")
 	}
-	if ctx.IsSet("beacon") {
-		cfg.Beacon.Address = ctx.String("beacon")
-	}
 	if ctx.Bool("no-http") {
-		cfg.HTTP.Enabled = false
+		cfg.HTTP.Enabled, cfg.Beacon.Enabled = false, false
 	}
 	if ctx.Bool("no-beacon") {
 		cfg.Beacon.Enabled = false
 	}
 	if ctx.Bool("allow-unsafe-external") {
-		cfg.HTTP.AllowUnsafeExternal, cfg.Beacon.AllowUnsafeExternal = true, true
+		cfg.HTTP.AllowUnsafeExternal = true
 	}
 	if ctx.IsSet("data-dir") {
 		cfg.Storage.Engine, cfg.Storage.Path = "pebble", ctx.String("data-dir")
@@ -111,13 +107,14 @@ func runNode(ctx *cli.Context) error {
 }
 
 func printSummary(cfg ethertest.Config) {
+	executionEndpoint, beaconEndpoint := configuredEndpoints(cfg)
 	if cfg.Log.JSON {
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
 			"event": "startup", "version": ethertest.Version,
 			"chain_id": cfg.Chain.ChainID, "fork": "osaka/fulu",
 			"synthetic_finality": true,
-			"execution_endpoint": cfg.HTTP.Address,
-			"beacon_endpoint":    cfg.Beacon.Address,
+			"execution_endpoint": executionEndpoint,
+			"beacon_endpoint":    beaconEndpoint,
 		})
 		return
 	}
@@ -132,10 +129,10 @@ func printSummary(cfg ethertest.Config) {
 	}
 	if cfg.Beacon.Enabled {
 		scheme := "http"
-		if cfg.Beacon.TLS.CertFile != "" {
+		if cfg.HTTP.TLS.CertFile != "" {
 			scheme = "https"
 		}
-		fmt.Printf("Beacon REST+SSE: %s://%s\n", scheme, cfg.Beacon.Address)
+		fmt.Printf("Beacon REST+SSE: %s://%s\n", scheme, cfg.HTTP.Address)
 	}
 	fmt.Println("Unlocked development accounts (never use these keys on a real network):")
 	for index, account := range accounts {
@@ -170,14 +167,25 @@ func networkCommand() *cli.Command {
 		if err != nil {
 			return err
 		}
+		executionEndpoint, beaconEndpoint := configuredEndpoints(cfg)
 		value := map[string]any{
 			"chainId": cfg.Chain.ChainID, "networkId": cfg.Chain.NetworkID,
 			"genesisTime": cfg.Chain.GenesisTime, "fork": "osaka/fulu",
-			"execution": cfg.HTTP.Address, "consensus": cfg.Beacon.Address,
+			"execution": executionEndpoint, "consensus": beaconEndpoint,
 			"syntheticFinality": true,
 		}
 		return json.NewEncoder(os.Stdout).Encode(value)
 	}}
+}
+
+func configuredEndpoints(cfg ethertest.Config) (string, string) {
+	if !cfg.HTTP.Enabled {
+		return "", ""
+	}
+	if !cfg.Beacon.Enabled {
+		return cfg.HTTP.Address, ""
+	}
+	return cfg.HTTP.Address, cfg.HTTP.Address
 }
 
 func blobCommand() *cli.Command {

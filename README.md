@@ -17,8 +17,8 @@ go build -trimpath -o bin/ethertest ./cmd/ethertest
 
 Defaults:
 
-- EL HTTP+WS: `http://127.0.0.1:8545`
-- Beacon REST+SSE: `http://127.0.0.1:5052`
+- EL HTTP+WS and Beacon REST+SSE: `http://127.0.0.1:8545`
+- Beacon API paths start at `http://127.0.0.1:8545/eth/`
 - chain/network ID: `31337`
 - 10 Anvil-compatible accounts with 10,000 ETH each
 - 6-second slots, 8 slots/epoch, 64 deterministic validators
@@ -30,18 +30,20 @@ JSON logs, errors, metrics, or state archives.
 
 ### Docker Compose
 
-The included Compose example builds the CGO-free, nonroot image, publishes both
-APIs to host loopback only, and persists Pebble plus the graceful-shutdown state
-archive:
+The included Compose example builds the CGO-free, nonroot image, publishes the
+shared API listener to host loopback only, and persists Pebble plus the
+graceful-shutdown state archive:
 
 ```sh
 docker compose up --build
 docker compose down
 ```
 
-Execution RPC is available at `http://127.0.0.1:8545` and Beacon REST/SSE at
-`http://127.0.0.1:5052`. `docker compose down` sends SIGTERM and allows the node
-to write `/state/ethertest-state.tar.zst` before exit. Use
+Execution RPC is available at `http://127.0.0.1:8545` and Beacon REST/SSE uses
+the same listener, for example
+`http://127.0.0.1:8545/eth/v1/beacon/headers/head`.
+`docker compose down` sends SIGTERM and allows the node to write
+`/state/ethertest-state.tar.zst` before exit. Use
 `docker compose down -v` only when intentionally deleting both named volumes.
 
 ## Implemented alpha surface
@@ -89,6 +91,9 @@ Configuration precedence is defaults, strict TOML, `ETHERTEST_*`, then CLI.
 Unknown TOML keys and conflicting settings are rejected. Non-loopback listeners
 require explicit `--allow-unsafe-external`. TLS only uses user-provided
 certificate/key pairs and never modifies a trust store.
+Beacon exposes only an `enabled` setting and inherits the shared HTTP address,
+CORS, TLS, request limits, and unsafe-external policy. Disabling HTTP disables
+all network APIs; library configurations cannot enable Beacon without HTTP.
 
 ## Library
 

@@ -23,7 +23,7 @@ type Config struct {
 	Accounts  AccountsConfig `toml:"accounts"`
 	Mining    MiningConfig   `toml:"mining"`
 	HTTP      ListenerConfig `toml:"http"`
-	Beacon    ListenerConfig `toml:"beacon"`
+	Beacon    BeaconConfig   `toml:"beacon"`
 	Storage   StorageConfig  `toml:"storage"`
 	Events    EventsConfig   `toml:"events"`
 	Limits    ResourceLimits `toml:"limits"`
@@ -75,6 +75,10 @@ type ListenerConfig struct {
 	TLS                 TLSConfig `toml:"tls"`
 }
 
+type BeaconConfig struct {
+	Enabled bool `toml:"enabled"`
+}
+
 type StorageConfig struct {
 	Engine  string `toml:"engine"`
 	Path    string `toml:"path"`
@@ -109,9 +113,7 @@ func DefaultConfig() Config {
 		HTTP: ListenerConfig{
 			Enabled: true, Address: "127.0.0.1:8545", CORS: []string{"*"},
 		},
-		Beacon: ListenerConfig{
-			Enabled: true, Address: "127.0.0.1:5052", CORS: []string{"*"},
-		},
+		Beacon:  BeaconConfig{Enabled: true},
 		Storage: StorageConfig{Engine: "memory", Archive: true},
 		Events:  EventsConfig{Capacity: 4096},
 		Limits: ResourceLimits{
@@ -199,26 +201,27 @@ func (c Config) Validate() error {
 		c.Limits.MaxBatchItems <= 0 || c.Events.Capacity == 0 {
 		return errors.New("resource and event limits must be positive")
 	}
-	for name, listener := range map[string]ListenerConfig{"http": c.HTTP, "beacon": c.Beacon} {
-		if !listener.Enabled {
-			continue
-		}
-		host, _, err := net.SplitHostPort(listener.Address)
-		if err != nil {
-			return fmt.Errorf("%s.address: %w", name, err)
-		}
-		ip := net.ParseIP(host)
-		isLoopback := host == "localhost" || (ip != nil && ip.IsLoopback())
-		if !isLoopback && !listener.AllowUnsafeExternal {
-			return fmt.Errorf("%s.address is non-loopback; set allow_unsafe_external explicitly", name)
-		}
-		if (listener.TLS.CertFile == "") != (listener.TLS.KeyFile == "") {
-			return fmt.Errorf("%s TLS requires both cert_file and key_file", name)
-		}
-		if listener.TLS.CertFile != "" {
-			if _, err := tls.LoadX509KeyPair(listener.TLS.CertFile, listener.TLS.KeyFile); err != nil {
-				return fmt.Errorf("%s TLS certificate/key: %w", name, err)
-			}
+	if c.Beacon.Enabled && !c.HTTP.Enabled {
+		return errors.New("beacon.enabled requires http.enabled")
+	}
+	if !c.HTTP.Enabled {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(c.HTTP.Address)
+	if err != nil {
+		return fmt.Errorf("http.address: %w", err)
+	}
+	ip := net.ParseIP(host)
+	isLoopback := host == "localhost" || (ip != nil && ip.IsLoopback())
+	if !isLoopback && !c.HTTP.AllowUnsafeExternal {
+		return errors.New("http.address is non-loopback; set allow_unsafe_external explicitly")
+	}
+	if (c.HTTP.TLS.CertFile == "") != (c.HTTP.TLS.KeyFile == "") {
+		return errors.New("http TLS requires both cert_file and key_file")
+	}
+	if c.HTTP.TLS.CertFile != "" {
+		if _, err := tls.LoadX509KeyPair(c.HTTP.TLS.CertFile, c.HTTP.TLS.KeyFile); err != nil {
+			return fmt.Errorf("http TLS certificate/key: %w", err)
 		}
 	}
 	return nil
@@ -290,14 +293,10 @@ func applyEnv(c *Config) error {
 		{"HTTP_CORS", func(v string) error { c.HTTP.CORS = strings.Split(v, ","); return nil }},
 		{"HTTP_TLS_CERT_FILE", func(v string) error { c.HTTP.TLS.CertFile = v; return nil }},
 		{"HTTP_TLS_KEY_FILE", func(v string) error { c.HTTP.TLS.KeyFile = v; return nil }},
-		{"BEACON_ADDRESS", func(v string) error { c.Beacon.Address = v; return nil }},
 		{"BEACON_ENABLED", boolean(&c.Beacon.Enabled)},
-		{"BEACON_CORS", func(v string) error { c.Beacon.CORS = strings.Split(v, ","); return nil }},
-		{"BEACON_TLS_CERT_FILE", func(v string) error { c.Beacon.TLS.CertFile = v; return nil }},
-		{"BEACON_TLS_KEY_FILE", func(v string) error { c.Beacon.TLS.KeyFile = v; return nil }},
 		{"ALLOW_UNSAFE_EXTERNAL", func(v string) error {
 			n, err := strconv.ParseBool(v)
-			c.HTTP.AllowUnsafeExternal, c.Beacon.AllowUnsafeExternal = n, n
+			c.HTTP.AllowUnsafeExternal = n
 			return err
 		}},
 		{"MNEMONIC", func(v string) error { c.Accounts.Mnemonic = v; return nil }},

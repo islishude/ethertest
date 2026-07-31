@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/attestantio/go-eth2-client/spec/deneb"
 	"github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/rpc"
 	bls "github.com/protolambda/bls12-381-util"
 )
 
@@ -57,8 +60,9 @@ func TestDeterministicProposerSignatureVerifies(t *testing.T) {
 
 func TestBeaconJSONAndSSZContentNegotiation(t *testing.T) {
 	cfg := testConfig()
+	cfg.HTTP.Enabled = true
+	cfg.HTTP.Address = "127.0.0.1:0"
 	cfg.Beacon.Enabled = true
-	cfg.Beacon.Address = "127.0.0.1:0"
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +71,42 @@ func TestBeaconJSONAndSSZContentNegotiation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer node.Close() //nolint:errcheck
-	endpoint := node.Endpoints().Beacon
+	endpoints := node.Endpoints()
+	if endpoints.Execution == "" || endpoints.Execution != endpoints.Beacon {
+		t.Fatalf("shared endpoints = %#v", endpoints)
+	}
+	endpoint := endpoints.Beacon
+
+	httpRPC, err := rpc.DialHTTP(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer httpRPC.Close()
+	var chainID hexutil.Uint64
+	if err := httpRPC.Call(&chainID, "eth_chainId"); err != nil {
+		t.Fatal(err)
+	}
+	if uint64(chainID) != cfg.Chain.ChainID {
+		t.Fatalf("HTTP RPC chain ID = %d, want %d", chainID, cfg.Chain.ChainID)
+	}
+	var networkConfig map[string]any
+	if err := httpRPC.Call(&networkConfig, "ethertest_networkConfig"); err != nil {
+		t.Fatal(err)
+	}
+	if networkConfig["el"] != cfg.HTTP.Address || networkConfig["beacon"] != cfg.HTTP.Address {
+		t.Fatalf("network config endpoints = %#v", networkConfig)
+	}
+
+	websocketEndpoint := "ws" + strings.TrimPrefix(endpoint, "http")
+	websocketRPC, err := rpc.DialWebsocket(t.Context(), websocketEndpoint, "http://localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer websocketRPC.Close()
+	if err := websocketRPC.Call(&chainID, "eth_chainId"); err != nil {
+		t.Fatal(err)
+	}
+
 	response, err := http.Get(endpoint + "/eth/v1/beacon/headers/head")
 	if err != nil {
 		t.Fatal(err)
@@ -114,6 +153,21 @@ func TestBeaconJSONAndSSZContentNegotiation(t *testing.T) {
 	}
 	if signed.Message == nil || signed.Message.Body == nil {
 		t.Fatal("decoded SSZ block is incomplete")
+	}
+
+	request, _ = http.NewRequest(
+		http.MethodPost,
+		endpoint+"/eth/v1/not-a-beacon-route",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown Beacon route status = %d, want 404", response.StatusCode)
 	}
 }
 

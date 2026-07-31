@@ -23,8 +23,6 @@ cors = ["*"]
 
 [beacon]
 enabled = true
-address = "127.0.0.1:5052"
-cors = ["*"]
 
 [storage]
 engine = "memory"

@@ -54,6 +54,33 @@ func TestTLSMaterialFailsClosedDuringValidation(t *testing.T) {
 	}
 }
 
+func TestBeaconRequiresSharedHTTPListener(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.HTTP.Enabled = false
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected Beacon without the shared HTTP listener to fail validation")
+	}
+	cfg.Beacon.Enabled = false
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLegacyBeaconListenerConfigurationIsRejected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-beacon.toml")
+	if err := os.WriteFile(path, []byte("[beacon]\naddress = \"127.0.0.1:5052\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadConfig(path); err == nil {
+		t.Fatal("expected legacy Beacon address to be rejected")
+	}
+
+	t.Setenv("ETHERTEST_BEACON_ADDRESS", "127.0.0.1:5052")
+	if _, err := ReadConfig(""); err == nil {
+		t.Fatal("expected legacy Beacon environment key to be rejected")
+	}
+}
+
 func TestEnvironmentOverridesAndRejectsUnknownKeys(t *testing.T) {
 	t.Setenv("ETHERTEST_CHAIN_ID", "4242")
 	t.Setenv("ETHERTEST_SLOT_DURATION", "3s")

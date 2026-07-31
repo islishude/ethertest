@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -25,16 +24,7 @@ type beaconEnvelope struct {
 	Data any `json:"data"`
 }
 
-func (n *Node) startBeaconServer() error {
-	listener, err := net.Listen("tcp", n.cfg.Beacon.Address)
-	if err != nil {
-		return err
-	}
-	scheme := "http"
-	if n.cfg.Beacon.TLS.CertFile != "" {
-		scheme = "https"
-	}
-	n.beaconEndpoint = scheme + "://" + listener.Addr().String()
+func (n *Node) beaconHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/eth/v1/node/health", n.beaconHealth)
 	mux.HandleFunc("/eth/v1/node/syncing", n.beaconSyncing)
@@ -48,23 +38,7 @@ func (n *Node) startBeaconServer() error {
 	mux.HandleFunc("/eth/v1/beacon/blob_sidecars/", n.beaconBlobs)
 	mux.HandleFunc("/eth/v1/beacon/data_column_sidecars/", n.beaconDataColumns)
 	mux.HandleFunc("/eth/v1/events", n.beaconEvents)
-	n.beaconServer = &http.Server{
-		Addr:              n.cfg.Beacon.Address,
-		Handler:           corsHandler(n.cfg.Beacon.CORS, n.cfg.Limits.MaxRequestBytes, mux),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	go func() {
-		var serveErr error
-		if n.cfg.Beacon.TLS.CertFile != "" {
-			serveErr = n.beaconServer.ServeTLS(listener, n.cfg.Beacon.TLS.CertFile, n.cfg.Beacon.TLS.KeyFile)
-		} else {
-			serveErr = n.beaconServer.Serve(listener)
-		}
-		if serveErr != nil && serveErr != http.ErrServerClosed {
-			n.stopOnce.Do(func() { close(n.stopping) })
-		}
-	}()
-	return nil
+	return mux
 }
 
 func writeBeacon(w http.ResponseWriter, status int, value any) {

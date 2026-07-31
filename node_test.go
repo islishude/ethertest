@@ -6,7 +6,6 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -547,6 +546,9 @@ func TestNewHeadsSubscriptionAndSequentialBatch(t *testing.T) {
 func TestBeaconSSEStreamsFutureEvents(t *testing.T) {
 	cfg := testConfig()
 	cfg.Mining.Mode = "manual"
+	cfg.HTTP.Enabled = true
+	cfg.HTTP.Address = "127.0.0.1:0"
+	cfg.Beacon.Enabled = true
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -556,10 +558,13 @@ func TestBeaconSSEStreamsFutureEvents(t *testing.T) {
 	}
 	defer node.Close() //nolint:errcheck
 
-	server := httptest.NewServer(http.HandlerFunc(node.beaconEvents))
-	defer server.Close()
 	ctx := t.Context()
-	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
+	request, _ := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		node.Endpoints().Beacon+"/eth/v1/events",
+		nil,
+	)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -595,6 +600,48 @@ func TestBeaconSSEStreamsFutureEvents(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for SSE event")
+	}
+}
+
+func TestEndpointDiscoveryAndDisabledBeaconRouting(t *testing.T) {
+	cfg := testConfig()
+	cfg.HTTP.Enabled = true
+	cfg.HTTP.Address = "127.0.0.1:0"
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	endpoints := node.Endpoints()
+	if endpoints.Execution == "" || endpoints.Beacon != "" {
+		t.Fatalf("endpoints with Beacon disabled = %#v", endpoints)
+	}
+	response, err := http.Get(endpoints.Execution + "/eth/v1/node/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("disabled Beacon route status = %d, want 404", response.StatusCode)
+	}
+	if err := node.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	offline, err := New(testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := offline.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if endpoints := offline.Endpoints(); endpoints.Execution != "" || endpoints.Beacon != "" {
+		t.Fatalf("disabled HTTP endpoints = %#v", endpoints)
+	}
+	if err := offline.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

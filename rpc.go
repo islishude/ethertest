@@ -177,7 +177,16 @@ func (n *Node) startServers() error {
 			scheme = "https"
 		}
 		n.httpEndpoint = scheme + "://" + listener.Addr().String()
+		beaconHandler := n.beaconHandler()
 		handler := corsHandler(n.cfg.HTTP.CORS, n.cfg.Limits.MaxRequestBytes, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/eth/") {
+				if n.cfg.Beacon.Enabled {
+					beaconHandler.ServeHTTP(w, r)
+				} else {
+					http.NotFound(w, r)
+				}
+				return
+			}
 			if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 				server.WebsocketHandler(n.cfg.HTTP.CORS).ServeHTTP(w, r)
 				return
@@ -196,15 +205,6 @@ func (n *Node) startServers() error {
 				n.stopOnce.Do(func() { close(n.stopping) })
 			}
 		}()
-	}
-	if n.cfg.Beacon.Enabled {
-		if err := n.startBeaconServer(); err != nil {
-			if n.httpServer != nil {
-				_ = n.httpServer.Close()
-			}
-			server.Stop()
-			return err
-		}
 	}
 	return nil
 }
@@ -1135,12 +1135,20 @@ func (api *controlAPI) BranchSwitch(ctx context.Context, name string) (bool, err
 	return true, api.node.SwitchBranch(ctx, name)
 }
 func (api *controlAPI) NetworkConfig() map[string]any {
+	executionAddress := ""
+	beaconAddress := ""
+	if api.node.cfg.HTTP.Enabled {
+		executionAddress = api.node.cfg.HTTP.Address
+		if api.node.cfg.Beacon.Enabled {
+			beaconAddress = executionAddress
+		}
+	}
 	return map[string]any{
 		"chainId": api.node.cfg.Chain.ChainID, "networkId": api.node.cfg.Chain.NetworkID,
 		"genesisTime":   api.node.cfg.Chain.GenesisTime,
 		"slotDuration":  api.node.cfg.Chain.SlotDuration.String(),
 		"slotsPerEpoch": api.node.cfg.Chain.SlotsPerEpoch,
-		"el":            api.node.cfg.HTTP.Address, "beacon": api.node.cfg.Beacon.Address,
+		"el":            executionAddress, "beacon": beaconAddress,
 	}
 }
 

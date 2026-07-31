@@ -28,24 +28,22 @@ type commandResult struct {
 }
 
 type Node struct {
-	cfg            Config
-	chain          *executionChain
-	events         *eventLog
-	commands       chan command
-	stopping       chan struct{}
-	done           chan struct{}
-	stopOnce       sync.Once
-	running        atomic.Bool
-	rpcServer      *rpc.Server
-	httpServer     *http.Server
-	beaconServer   *http.Server
-	httpEndpoint   string
-	beaconEndpoint string
-	nextSnapshot   uint64
-	snapshots      map[uint64]*chainPoint
-	checkpoints    map[string]*chainPoint
-	branches       map[string]*branch
-	consensus      *consensusModel
+	cfg          Config
+	chain        *executionChain
+	events       *eventLog
+	commands     chan command
+	stopping     chan struct{}
+	done         chan struct{}
+	stopOnce     sync.Once
+	running      atomic.Bool
+	rpcServer    *rpc.Server
+	httpServer   *http.Server
+	httpEndpoint string
+	nextSnapshot uint64
+	snapshots    map[uint64]*chainPoint
+	checkpoints  map[string]*chainPoint
+	branches     map[string]*branch
+	consensus    *consensusModel
 }
 
 type chainPoint struct {
@@ -329,9 +327,6 @@ func (n *Node) Close() error {
 		if n.httpServer != nil {
 			_ = n.httpServer.Shutdown(shutdownCtx)
 		}
-		if n.beaconServer != nil {
-			_ = n.beaconServer.Shutdown(shutdownCtx)
-		}
 		if n.rpcServer != nil {
 			n.rpcServer.Stop()
 		}
@@ -362,5 +357,9 @@ type Endpoints struct {
 }
 
 func (n *Node) Endpoints() Endpoints {
-	return Endpoints{Execution: n.httpEndpoint, Beacon: n.beaconEndpoint}
+	endpoints := Endpoints{Execution: n.httpEndpoint}
+	if n.cfg.Beacon.Enabled && n.httpEndpoint != "" {
+		endpoints.Beacon = n.httpEndpoint
+	}
+	return endpoints
 }
