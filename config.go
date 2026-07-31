@@ -96,7 +96,9 @@ type ResourceLimits struct {
 }
 
 type LogConfig struct {
-	JSON bool `toml:"json"`
+	Level            string        `toml:"level"`
+	JSON             bool          `toml:"json"`
+	ProgressInterval time.Duration `toml:"progress_interval"`
 }
 
 func DefaultConfig() Config {
@@ -116,6 +118,7 @@ func DefaultConfig() Config {
 		Beacon:  BeaconConfig{Enabled: true},
 		Storage: StorageConfig{Engine: "memory", Archive: true},
 		Events:  EventsConfig{Capacity: 4096},
+		Log:     LogConfig{Level: "info", ProgressInterval: 10 * time.Second},
 		Limits: ResourceLimits{
 			MaxRequestBytes: 16 << 20, MaxBatchItems: 1000, MaxResponseBytes: 64 << 20,
 		},
@@ -201,6 +204,14 @@ func (c Config) Validate() error {
 		c.Limits.MaxBatchItems <= 0 || c.Events.Capacity == 0 {
 		return errors.New("resource and event limits must be positive")
 	}
+	switch strings.ToLower(c.Log.Level) {
+	case "debug", "info", "warn", "error", "off":
+	default:
+		return fmt.Errorf("invalid log.level %q", c.Log.Level)
+	}
+	if c.Log.ProgressInterval < time.Second {
+		return errors.New("log.progress_interval must be at least 1s")
+	}
 	if c.Beacon.Enabled && !c.HTTP.Enabled {
 		return errors.New("beacon.enabled requires http.enabled")
 	}
@@ -211,9 +222,7 @@ func (c Config) Validate() error {
 	if err != nil {
 		return fmt.Errorf("http.address: %w", err)
 	}
-	ip := net.ParseIP(host)
-	isLoopback := host == "localhost" || (ip != nil && ip.IsLoopback())
-	if !isLoopback && !c.HTTP.AllowUnsafeExternal {
+	if !isLoopbackHost(host) && !c.HTTP.AllowUnsafeExternal {
 		return errors.New("http.address is non-loopback; set allow_unsafe_external explicitly")
 	}
 	if (c.HTTP.TLS.CertFile == "") != (c.HTTP.TLS.KeyFile == "") {
@@ -225,6 +234,16 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func isLoopbackAddress(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	return err == nil && isLoopbackHost(host)
+}
+
+func isLoopbackHost(host string) bool {
+	ip := net.ParseIP(host)
+	return host == "localhost" || (ip != nil && ip.IsLoopback())
 }
 
 func applyEnv(c *Config) error {
@@ -314,7 +333,9 @@ func applyEnv(c *Config) error {
 		{"MAX_REQUEST_BYTES", int64Value(&c.Limits.MaxRequestBytes)},
 		{"MAX_BATCH_ITEMS", integer(&c.Limits.MaxBatchItems)},
 		{"MAX_RESPONSE_BYTES", int64Value(&c.Limits.MaxResponseBytes)},
+		{"LOG_LEVEL", func(v string) error { c.Log.Level = strings.ToLower(v); return nil }},
 		{"LOG_JSON", boolean(&c.Log.JSON)},
+		{"LOG_PROGRESS_INTERVAL", duration(&c.Log.ProgressInterval)},
 		{"DUMP_STATE", func(v string) error { c.DumpState = v; return nil }},
 	}
 	known := make(map[string]struct{}, len(setters))

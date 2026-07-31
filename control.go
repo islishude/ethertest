@@ -94,6 +94,13 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 	if _, err := n.events.append(Event{Type: "control_block", BlockHash: block.Hash(), BlockNumber: block.NumberU64()}); err != nil {
 		return common.Hash{}, err
 	}
+	n.logger.Info("control block applied",
+		"event", "control_block_applied",
+		"block_number", block.NumberU64(),
+		"block_hash", block.Hash().Hex(),
+		"slot", targetSlot,
+		"accounts_changed", len(changes),
+	)
 	return block.Hash(), nil
 }
 

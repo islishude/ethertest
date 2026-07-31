@@ -64,7 +64,18 @@ func (n *Node) dumpState(path string) error {
 		HeadHash: head.Hash().Hex(), HeadNumber: head.Number.Uint64(),
 		Revision: uint64(n.Revision()), DatabaseSHA256: hex.EncodeToString(sum[:]),
 	}
-	return writeArchiveAtomic(path, manifest, database)
+	if err := writeArchiveAtomic(path, manifest, database); err != nil {
+		return err
+	}
+	n.logger.Info("state archive written",
+		"event", "state_archive_written",
+		"path", path,
+		"head_number", manifest.HeadNumber,
+		"head_hash", manifest.HeadHash,
+		"revision", manifest.Revision,
+		"database_bytes", len(database),
+	)
+	return nil
 }
 
 func InspectState(path string) (StateManifest, error) {

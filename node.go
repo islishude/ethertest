@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -34,6 +35,7 @@ type Node struct {
 	commands     chan command
 	stopping     chan struct{}
 	done         chan struct{}
+	stopSignal   sync.Once
 	stopOnce     sync.Once
 	running      atomic.Bool
 	rpcServer    *rpc.Server
@@ -44,6 +46,12 @@ type Node struct {
 	checkpoints  map[string]*chainPoint
 	branches     map[string]*branch
 	consensus    *consensusModel
+	logger       *slog.Logger
+	startedAt    time.Time
+	progress     progressReporter
+
+	intervalFailure         string
+	intervalFailureLoggedAt time.Time
 }
 
 type chainPoint struct {
@@ -60,12 +68,18 @@ type branch struct {
 	tainted bool
 }
 
-func New(cfg Config) (*Node, error) {
+func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
 	if cfg.Chain.GenesisTime == 0 {
 		cfg.Chain.GenesisTime = time.Now().UTC().Unix()
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
+	}
+	options := nodeOptions{logger: discardLogger()}
+	for _, apply := range suppliedOptions {
+		if apply != nil {
+			apply(&options)
+		}
 	}
 	chain, err := newExecutionChain(cfg)
 	if err != nil {
@@ -85,7 +99,7 @@ func New(cfg Config) (*Node, error) {
 		cfg: cfg, chain: chain, events: events,
 		commands: make(chan command), stopping: make(chan struct{}), done: make(chan struct{}),
 		snapshots: make(map[uint64]*chainPoint), checkpoints: checkpoints,
-		branches: branches,
+		branches: branches, logger: options.logger,
 	}
 	consensus, err := newConsensusModel(cfg, accountsFromChain(chain))
 	if err != nil {
@@ -109,6 +123,12 @@ func (n *Node) Snapshot(ctx context.Context) (uint64, error) {
 		head := chain.blockchain.CurrentBlock()
 		n.nextSnapshot++
 		n.snapshots[n.nextSnapshot] = &chainPoint{hash: head.Hash(), number: head.Number.Uint64()}
+		n.logger.Debug("snapshot created",
+			"event", "snapshot_created",
+			"snapshot_id", n.nextSnapshot,
+			"block_number", head.Number.Uint64(),
+			"block_hash", head.Hash().Hex(),
+		)
 		return n.nextSnapshot, nil
 	})
 	if err != nil {
@@ -131,6 +151,12 @@ func (n *Node) Revert(ctx context.Context, id uint64) (bool, error) {
 			return false, err
 		}
 		point.used = true
+		n.logger.Info("snapshot reverted",
+			"event", "snapshot_reverted",
+			"snapshot_id", id,
+			"block_number", target.NumberU64(),
+			"block_hash", target.Hash().Hex(),
+		)
 		return true, nil
 	})
 	if err != nil {
@@ -150,6 +176,12 @@ func (n *Node) Checkpoint(ctx context.Context, name string) error {
 			return nil, err
 		}
 		n.checkpoints[name] = point
+		n.logger.Info("checkpoint created",
+			"event", "checkpoint_created",
+			"name", name,
+			"block_number", point.number,
+			"block_hash", point.hash.Hex(),
+		)
 		return nil, nil
 	})
 	return err
@@ -165,7 +197,16 @@ func (n *Node) Restore(ctx context.Context, name string) error {
 		if target == nil {
 			return nil, errors.New("checkpoint block is unavailable")
 		}
-		return nil, n.switchCanonical(chain, target)
+		if err := n.switchCanonical(chain, target); err != nil {
+			return nil, err
+		}
+		n.logger.Info("checkpoint restored",
+			"event", "checkpoint_restored",
+			"name", name,
+			"block_number", target.NumberU64(),
+			"block_hash", target.Hash().Hex(),
+		)
+		return nil, nil
 	})
 	return err
 }
@@ -178,11 +219,35 @@ func (n *Node) Start() error {
 	}
 	go n.run()
 	if err := n.startServers(); err != nil {
-		close(n.stopping)
+		n.stopSignal.Do(func() { close(n.stopping) })
 		<-n.done
 		n.running.Store(false)
 		_ = n.chain.close()
 		return err
+	}
+	n.startedAt = time.Now()
+	head := n.chain.blockchain.CurrentBlock()
+	endpoints := n.Endpoints()
+	n.logger.Info("node started",
+		"event", "node_started",
+		"version", Version,
+		"chain_id", n.cfg.Chain.ChainID,
+		"fork", "osaka/fulu",
+		"head_number", head.Number.Uint64(),
+		"head_hash", head.Hash().Hex(),
+		"slot", n.chain.currentSlot(),
+		"mining_mode", n.cfg.Mining.Mode,
+		"storage_engine", n.cfg.Storage.Engine,
+		"restored", head.Number.Uint64() != 0,
+		"execution_endpoint", endpoints.Execution,
+		"beacon_endpoint", endpoints.Beacon,
+		"synthetic_finality", true,
+	)
+	if n.cfg.HTTP.Enabled && n.cfg.HTTP.AllowUnsafeExternal && !isLoopbackAddress(n.cfg.HTTP.Address) {
+		n.logger.Warn("HTTP listener permits non-loopback binding",
+			"event", "unsafe_external_listener",
+			"address", n.cfg.HTTP.Address,
+		)
 	}
 	return nil
 }
@@ -196,6 +261,14 @@ func (n *Node) run() {
 		ticks = ticker.C
 		defer ticker.Stop()
 	}
+	var progressTicker *time.Ticker
+	var progressTicks <-chan time.Time
+	background := context.Background()
+	if n.logger.Enabled(background, slog.LevelInfo) && !n.logger.Enabled(background, slog.LevelDebug) {
+		progressTicker = time.NewTicker(n.cfg.Log.ProgressInterval)
+		progressTicks = progressTicker.C
+		defer progressTicker.Stop()
+	}
 	for {
 		select {
 		case request := <-n.commands:
@@ -207,15 +280,25 @@ func (n *Node) run() {
 				request.out <- commandResult{value: value, err: err}
 			}
 		case <-n.stopping:
+			n.flushProgress()
 			return
+		case <-progressTicks:
+			n.flushProgress()
 		case <-ticks:
 			if n.chain.pendingCount() == 0 && !n.cfg.Mining.AutoMineEmpty {
 				continue
 			}
 			block, _, err := n.chain.mine(uint64(n.cfg.Chain.SlotDuration/time.Second), false)
-			if err == nil {
-				_, _ = n.events.append(Event{Type: "block", BlockHash: block.Hash(), BlockNumber: block.NumberU64()})
+			if err != nil {
+				n.reportIntervalFailure("interval_mining_failed", "interval mining failed", err)
+				continue
 			}
+			if _, err := n.events.append(Event{Type: "block", BlockHash: block.Hash(), BlockNumber: block.NumberU64()}); err != nil {
+				n.reportIntervalFailure("interval_event_append_failed", "interval mining event append failed", err)
+				continue
+			}
+			n.reportIntervalRecovery()
+			n.recordAutomaticBlock(block, "interval")
 		}
 	}
 }
@@ -246,6 +329,12 @@ func (n *Node) SendTransaction(ctx context.Context, tx *types.Transaction) (comm
 		if err := chain.addTransaction(tx); err != nil {
 			return common.Hash{}, err
 		}
+		n.logger.Debug("transaction accepted",
+			"event", "transaction_accepted",
+			"transaction_hash", tx.Hash().Hex(),
+			"transaction_type", tx.Type(),
+			"nonce", tx.Nonce(),
+		)
 		if n.cfg.Mining.Mode == "transaction" {
 			block, _, err := chain.mine(uint64(n.cfg.Chain.SlotDuration/time.Second), false)
 			if err != nil {
@@ -254,6 +343,7 @@ func (n *Node) SendTransaction(ctx context.Context, tx *types.Transaction) (comm
 			if _, err := n.events.append(Event{Type: "block", BlockHash: block.Hash(), BlockNumber: block.NumberU64()}); err != nil {
 				return common.Hash{}, err
 			}
+			n.recordAutomaticBlock(block, "transaction")
 		}
 		return tx.Hash(), nil
 	})
@@ -266,15 +356,36 @@ func (n *Node) SendTransaction(ctx context.Context, tx *types.Transaction) (comm
 func (n *Node) Mine(ctx context.Context, count uint64, empty bool) ([]common.Hash, error) {
 	value, err := n.execute(ctx, func(chain *executionChain) (any, error) {
 		hashes := make([]common.Hash, 0, count)
+		var firstNumber uint64
+		var lastNumber uint64
+		var transactions uint64
 		for range count {
 			block, _, err := chain.mine(uint64(n.cfg.Chain.SlotDuration/time.Second), empty)
 			if err != nil {
 				return nil, err
 			}
 			hashes = append(hashes, block.Hash())
+			if len(hashes) == 1 {
+				firstNumber = block.NumberU64()
+			}
+			lastNumber = block.NumberU64()
+			transactions += uint64(len(block.Transactions()))
 			if _, err := n.events.append(Event{Type: "block", BlockHash: block.Hash(), BlockNumber: block.NumberU64()}); err != nil {
 				return nil, err
 			}
+		}
+		if len(hashes) != 0 {
+			n.logger.Info("blocks mined",
+				"event", "blocks_mined",
+				"source", "manual",
+				"blocks", len(hashes),
+				"transactions", transactions,
+				"first_block", firstNumber,
+				"last_block", lastNumber,
+				"head_hash", hashes[len(hashes)-1].Hex(),
+				"slot", chain.currentSlot(),
+				"empty", empty,
+			)
 		}
 		return hashes, nil
 	})
@@ -293,6 +404,14 @@ func (n *Node) MissSlots(ctx context.Context, count uint64) ([]uint64, error) {
 			if _, err := n.events.append(Event{Type: "missed_slot"}); err != nil {
 				return nil, err
 			}
+		}
+		if len(slots) != 0 {
+			n.logger.Info("slots missed",
+				"event", "slots_missed",
+				"count", len(slots),
+				"first_slot", slots[0],
+				"last_slot", slots[len(slots)-1],
+			)
 		}
 		return slots, nil
 	})
@@ -322,23 +441,52 @@ func (n *Node) Close() error {
 	var err error
 	n.stopOnce.Do(func() {
 		wasRunning := n.running.Swap(false)
+		if wasRunning {
+			n.logger.Info("node stopping", "event", "node_stopping")
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if n.httpServer != nil {
-			_ = n.httpServer.Shutdown(shutdownCtx)
+			if shutdownErr := n.httpServer.Shutdown(shutdownCtx); shutdownErr != nil {
+				err = shutdownErr
+				n.logger.Error("HTTP server shutdown failed",
+					"event", "http_shutdown_failed",
+					"error", shutdownErr,
+				)
+			}
 		}
 		if n.rpcServer != nil {
 			n.rpcServer.Stop()
 		}
 		if wasRunning {
-			close(n.stopping)
+			n.stopSignal.Do(func() { close(n.stopping) })
 			<-n.done
 		}
+		head := n.chain.blockchain.CurrentBlock()
+		revision := n.Revision()
 		if n.cfg.DumpState != "" {
-			err = n.dumpState(n.cfg.DumpState)
+			if dumpErr := n.dumpState(n.cfg.DumpState); dumpErr != nil {
+				if err == nil {
+					err = dumpErr
+				}
+				n.logger.Error("state archive failed", "event", "state_archive_failed", "error", dumpErr)
+			}
 		}
-		if closeErr := n.chain.close(); err == nil {
-			err = closeErr
+		if closeErr := n.chain.close(); closeErr != nil {
+			if err == nil {
+				err = closeErr
+			}
+			n.logger.Error("chain storage close failed", "event", "storage_close_failed", "error", closeErr)
+		}
+		if wasRunning {
+			n.logger.Info("node stopped",
+				"event", "node_stopped",
+				"head_number", head.Number.Uint64(),
+				"head_hash", head.Hash().Hex(),
+				"revision", revision,
+				"uptime", time.Since(n.startedAt).Round(time.Millisecond).String(),
+				"clean", err == nil,
+			)
 		}
 	})
 	return err

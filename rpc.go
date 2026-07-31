@@ -202,7 +202,12 @@ func (n *Node) startServers() error {
 				serveErr = n.httpServer.Serve(listener)
 			}
 			if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-				n.stopOnce.Do(func() { close(n.stopping) })
+				n.logger.Error("HTTP server failed",
+					"event", "http_server_failed",
+					"address", n.httpEndpoint,
+					"error", serveErr,
+				)
+				n.stopSignal.Do(func() { close(n.stopping) })
 			}
 		}()
 	}
@@ -1044,6 +1049,7 @@ func (api *txpoolAPI) poolCounts() (pending, queued int) {
 func (api *minerAPI) Start(_ *int) bool {
 	_, _ = api.node.execute(context.Background(), func(_ *executionChain) (any, error) {
 		api.node.cfg.Mining.Mode = "transaction"
+		api.node.logger.Info("mining mode changed", "event", "mining_mode_changed", "mode", "transaction")
 		return nil, nil
 	})
 	return true
@@ -1051,6 +1057,7 @@ func (api *minerAPI) Start(_ *int) bool {
 func (api *minerAPI) Stop() bool {
 	_, _ = api.node.execute(context.Background(), func(_ *executionChain) (any, error) {
 		api.node.cfg.Mining.Mode = "manual"
+		api.node.logger.Info("mining mode changed", "event", "mining_mode_changed", "mode", "manual")
 		return nil, nil
 	})
 	return true
@@ -1059,6 +1066,10 @@ func (api *minerAPI) Stop() bool {
 func (api *minerAPI) SetEtherbase(ctx context.Context, address common.Address) (bool, error) {
 	_, err := api.node.execute(ctx, func(chain *executionChain) (any, error) {
 		chain.feeRecipient = address
+		api.node.logger.Info("fee recipient changed",
+			"event", "fee_recipient_changed",
+			"address", address.Hex(),
+		)
 		return nil, nil
 	})
 	return err == nil, err

@@ -25,8 +25,8 @@ Defaults:
 - Osaka/Fulu active at genesis
 - synthetic safe/finalized checkpoints lagging one/two epochs
 
-The startup banner prints development private keys. Keys are never included in
-JSON logs, errors, metrics, or state archives.
+In human mode, a separate stderr banner prints development private keys. Keys
+are never included in structured logs, errors, metrics, or state archives.
 
 ### Docker Compose
 
@@ -95,6 +95,27 @@ Beacon exposes only an `enabled` setting and inherits the shared HTTP address,
 CORS, TLS, request limits, and unsafe-external policy. Disabling HTTP disables
 all network APIs; library configurations cannot enable Beacon without HTTP.
 
+### Logging
+
+The CLI writes structured runtime logs to stdout at `info` level. Human-only
+development account output is kept on stderr so it cannot corrupt the log
+stream. Lifecycle and control operations are logged immediately, while
+transaction and interval automining activity is combined into one
+`chain_progress` event every 10 seconds. Empty intervals and per-request access
+logs are suppressed. `debug` replaces the aggregate with per-transaction and
+per-block events.
+
+Configure logging with `[log]`, `--log-level`, `--log-json`, and
+`--log-progress-interval`, or with `ETHERTEST_LOG_LEVEL`,
+`ETHERTEST_LOG_JSON`, and `ETHERTEST_LOG_PROGRESS_INTERVAL`. Supported levels
+are `debug`, `info`, `warn`, `error`, and `off`; the minimum progress interval
+is one second. JSON mode emits one object per line with stable `time`, `level`,
+`msg`, and `event` fields and suppresses the human private-key banner.
+
+Embedded nodes do not write logs unless the caller supplies
+`ethertest.WithLogger(logger)`. Runtime logs never contain private keys,
+mnemonics, raw transaction data, or control-state values.
+
 ## Library
 
 ```go
@@ -110,6 +131,9 @@ defer node.Close()
 client := node.RPCClient()
 defer client.Close()
 ```
+
+Applications that want node logs can pass a host-owned `*slog.Logger` with
+`ethertest.New(cfg, ethertest.WithLogger(logger))`.
 
 All public writes pass through one controller. Queries use geth's immutable
 committed headers/state roots and may run concurrently. Persistent namespaces

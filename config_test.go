@@ -43,6 +43,10 @@ func TestExternalBindingRequiresOptIn(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	if !isLoopbackAddress("127.0.0.1:8545") || !isLoopbackAddress("[::1]:8545") ||
+		isLoopbackAddress("0.0.0.0:8545") {
+		t.Fatal("loopback listener classification is incorrect")
+	}
 }
 
 func TestTLSMaterialFailsClosedDuringValidation(t *testing.T) {
@@ -84,15 +88,34 @@ func TestLegacyBeaconListenerConfigurationIsRejected(t *testing.T) {
 func TestEnvironmentOverridesAndRejectsUnknownKeys(t *testing.T) {
 	t.Setenv("ETHERTEST_CHAIN_ID", "4242")
 	t.Setenv("ETHERTEST_SLOT_DURATION", "3s")
+	t.Setenv("ETHERTEST_LOG_LEVEL", "debug")
+	t.Setenv("ETHERTEST_LOG_PROGRESS_INTERVAL", "15s")
 	cfg, err := ReadConfig("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Chain.ChainID != 4242 || cfg.Chain.SlotDuration != 3*time.Second {
-		t.Fatalf("environment overrides not applied: %#v", cfg.Chain)
+	if cfg.Chain.ChainID != 4242 || cfg.Chain.SlotDuration != 3*time.Second ||
+		cfg.Log.Level != "debug" || cfg.Log.ProgressInterval != 15*time.Second {
+		t.Fatalf("environment overrides not applied: chain=%#v log=%#v", cfg.Chain, cfg.Log)
 	}
 	t.Setenv("ETHERTEST_UNKNOWN_SETTING", "1")
 	if _, err := ReadConfig(""); err == nil {
 		t.Fatal("expected unknown ETHERTEST_ key rejection")
+	}
+}
+
+func TestLogConfigurationValidation(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Log.Level != "info" || cfg.Log.ProgressInterval != 10*time.Second {
+		t.Fatalf("unexpected log defaults %#v", cfg.Log)
+	}
+	cfg.Log.Level = "trace"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid log level rejection")
+	}
+	cfg.Log.Level = "info"
+	cfg.Log.ProgressInterval = time.Second - 1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected short progress interval rejection")
 	}
 }

@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"math/big"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -49,6 +52,9 @@ func commonFlags() []cli.Flag {
 		&cli.BoolFlag{Name: "allow-unsafe-external"},
 		&cli.StringFlag{Name: "data-dir", Usage: "enable Pebble at this directory"},
 		&cli.StringFlag{Name: "dump-state", Usage: "atomically dump state on shutdown"},
+		&cli.StringFlag{Name: "log-level", Usage: "debug, info, warn, error, or off"},
+		&cli.BoolFlag{Name: "log-json", Usage: "write newline-delimited JSON logs"},
+		&cli.DurationFlag{Name: "log-progress-interval", Usage: "aggregate automatic mining progress over this interval"},
 	}
 }
 
@@ -81,6 +87,15 @@ func effectiveConfig(ctx *cli.Context) (ethertest.Config, error) {
 	if ctx.IsSet("dump-state") {
 		cfg.DumpState = ctx.String("dump-state")
 	}
+	if ctx.IsSet("log-level") {
+		cfg.Log.Level = ctx.String("log-level")
+	}
+	if ctx.IsSet("log-json") {
+		cfg.Log.JSON = ctx.Bool("log-json")
+	}
+	if ctx.IsSet("log-progress-interval") {
+		cfg.Log.ProgressInterval = ctx.Duration("log-progress-interval")
+	}
 	if cfg.Chain.GenesisTime == 0 {
 		cfg.Chain.GenesisTime = time.Now().UTC().Unix()
 	}
@@ -92,52 +107,51 @@ func runNode(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	node, err := ethertest.New(cfg)
+	logger := newLogger(cfg.Log, os.Stdout)
+	node, err := ethertest.New(cfg, ethertest.WithLogger(logger))
 	if err != nil {
 		return err
 	}
 	if err := node.Start(); err != nil {
 		return err
 	}
-	printSummary(cfg)
+	printDevelopmentAccounts(os.Stderr, cfg)
 	signalContext, stop := signal.NotifyContext(ctx.Context, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	<-signalContext.Done()
 	return node.Close()
 }
 
-func printSummary(cfg ethertest.Config) {
-	executionEndpoint, beaconEndpoint := configuredEndpoints(cfg)
+// printDevelopmentAccounts is intentionally separate from structured runtime
+// logging: the human-only output contains public development private keys.
+func printDevelopmentAccounts(output io.Writer, cfg ethertest.Config) {
 	if cfg.Log.JSON {
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
-			"event": "startup", "version": ethertest.Version,
-			"chain_id": cfg.Chain.ChainID, "fork": "osaka/fulu",
-			"synthetic_finality": true,
-			"execution_endpoint": executionEndpoint,
-			"beacon_endpoint":    beaconEndpoint,
-		})
 		return
 	}
 	accounts, _ := ethertest.DeriveAccounts(cfg.Accounts.Mnemonic, cfg.Accounts.Count)
-	fmt.Printf("ethertest %s  chain=%d  fork=Osaka/Fulu  finality=synthetic\n", ethertest.Version, cfg.Chain.ChainID)
-	if cfg.HTTP.Enabled {
-		scheme := "http"
-		if cfg.HTTP.TLS.CertFile != "" {
-			scheme = "https"
-		}
-		fmt.Printf("EL HTTP+WS: %s://%s\n", scheme, cfg.HTTP.Address)
-	}
-	if cfg.Beacon.Enabled {
-		scheme := "http"
-		if cfg.HTTP.TLS.CertFile != "" {
-			scheme = "https"
-		}
-		fmt.Printf("Beacon REST+SSE: %s://%s\n", scheme, cfg.HTTP.Address)
-	}
-	fmt.Println("Unlocked development accounts (never use these keys on a real network):")
+	fmt.Fprintln(output, "Unlocked development accounts (never use these keys on a real network):")
 	for index, account := range accounts {
-		fmt.Printf("  (%d) %s  %s  %s\n", index, account.Address, hex.EncodeToString(crypto.FromECDSA(account.PrivateKey)), account.Path)
+		fmt.Fprintf(output, "  (%d) %s  %s  %s\n", index, account.Address, hex.EncodeToString(crypto.FromECDSA(account.PrivateKey)), account.Path)
 	}
+}
+
+func newLogger(cfg ethertest.LogConfig, output io.Writer) *slog.Logger {
+	level := slog.LevelInfo
+	switch strings.ToLower(cfg.Level) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	case "off":
+		level = slog.Level(100)
+	}
+	options := &slog.HandlerOptions{Level: level}
+	if cfg.JSON {
+		return slog.New(slog.NewJSONHandler(output, options))
+	}
+	return slog.New(slog.NewTextHandler(output, options))
 }
 
 func configCommand() *cli.Command {

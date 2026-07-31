@@ -36,6 +36,12 @@ func (n *Node) CreateBranch(ctx context.Context, name string, blockNumber uint64
 			return nil, err
 		}
 		n.branches[name] = item
+		n.logger.Info("branch created",
+			"event", "branch_created",
+			"name", name,
+			"base_number", base.NumberU64(),
+			"base_hash", base.Hash().Hex(),
+		)
 		return nil, nil
 	})
 	return err
@@ -80,6 +86,14 @@ func (n *Node) MineBranch(ctx context.Context, name string, count uint64) ([]com
 		if err := persistBranch(chain.db, item); err != nil {
 			return nil, err
 		}
+		if len(hashes) != 0 {
+			n.logger.Info("branch blocks mined",
+				"event", "branch_blocks_mined",
+				"name", name,
+				"blocks", len(hashes),
+				"head_hash", hashes[len(hashes)-1].Hex(),
+			)
+		}
 		return hashes, nil
 	})
 	if err != nil {
@@ -98,7 +112,16 @@ func (n *Node) SwitchBranch(ctx context.Context, name string) error {
 		if target == nil {
 			return nil, errors.New("branch head not found")
 		}
-		return nil, n.switchCanonical(chain, target)
+		if err := n.switchCanonical(chain, target); err != nil {
+			return nil, err
+		}
+		n.logger.Info("branch switched",
+			"event", "branch_switched",
+			"name", name,
+			"block_number", target.NumberU64(),
+			"block_hash", target.Hash().Hex(),
+		)
+		return nil, nil
 	})
 	return err
 }
@@ -109,6 +132,10 @@ func (n *Node) switchCanonical(chain *executionChain, target *types.Block) error
 		return nil
 	}
 	oldPath, newPath := divergentPaths(chain, oldHead, target)
+	commonAncestor := oldHead
+	for range oldPath {
+		commonAncestor = chain.blockchain.GetBlockByHash(commonAncestor.ParentHash())
+	}
 	if _, err := chain.blockchain.SetCanonical(target); err != nil {
 		return err
 	}
@@ -140,6 +167,17 @@ func (n *Node) switchCanonical(chain *executionChain, target *types.Block) error
 			return err
 		}
 	}
+	n.logger.Info("canonical chain reorganized",
+		"event", "chain_reorganized",
+		"old_head_number", oldHead.NumberU64(),
+		"old_head_hash", oldHead.Hash().Hex(),
+		"new_head_number", target.NumberU64(),
+		"new_head_hash", target.Hash().Hex(),
+		"common_ancestor_number", commonAncestor.NumberU64(),
+		"common_ancestor_hash", commonAncestor.Hash().Hex(),
+		"removed_blocks", len(oldPath),
+		"added_blocks", len(newPath),
+	)
 	return nil
 }
 
