@@ -19,7 +19,7 @@ Defaults:
 
 - EL HTTP+WS and Beacon REST+SSE: `http://127.0.0.1:8545`
 - Beacon API paths start at `http://127.0.0.1:8545/eth/`
-- chain/network ID: `31337`
+- chain/network ID: `1337` (matching `geth --dev`)
 - 10 Anvil-compatible accounts with 10,000 ETH each
 - 6-second slots, 8 slots/epoch, 64 deterministic validators
 - Osaka/Fulu active at genesis

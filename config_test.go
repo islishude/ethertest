@@ -5,7 +5,18 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/ethereum/go-ethereum/params"
 )
+
+func TestDefaultChainIDMatchesGethDev(t *testing.T) {
+	want := params.AllDevChainProtocolChanges.ChainID.Uint64()
+	cfg := DefaultConfig()
+	if DefaultChainID != want || cfg.Chain.ChainID != want || cfg.Chain.NetworkID != want {
+		t.Fatalf("default chain/network IDs = %d/%d, constant = %d, want geth dev ID %d",
+			cfg.Chain.ChainID, cfg.Chain.NetworkID, DefaultChainID, want)
+	}
+}
 
 func TestDefaultAccountsMatchAnvil(t *testing.T) {
 	accounts, err := DeriveAccounts(DefaultMnemonic, 2)

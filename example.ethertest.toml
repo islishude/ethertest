@@ -1,6 +1,6 @@
 [chain]
-chain_id = 31337
-network_id = 31337
+chain_id = 1337
+network_id = 1337
 genesis_time = 1800000000
 slot_duration = "6s"
 slots_per_epoch = 8

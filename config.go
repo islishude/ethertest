@@ -15,7 +15,7 @@ import (
 
 const (
 	DefaultMnemonic = "test test test test test test test test test test test junk"
-	DefaultChainID  = uint64(31337)
+	DefaultChainID  = uint64(1337)
 )
 
 type Config struct {
