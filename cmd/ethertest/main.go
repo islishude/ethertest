@@ -247,7 +247,7 @@ func blobDecode(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	if len(input) != len(kzg4844.Blob{}) {
+	if len(input) != 131072 {
 		return errors.New("invalid canonical blob length")
 	}
 	var blob kzg4844.Blob
