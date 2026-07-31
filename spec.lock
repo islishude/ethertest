@@ -1,0 +1,37 @@
+format = 1
+generated_at = "2026-07-31T00:00:00Z"
+
+# Go dependencies are additionally locked by go.mod and go.sum. Normal builds
+# never fetch the specification repositories. Automated digest verification is
+# still a v0.1 release gate.
+
+[[source]]
+name = "go-ethereum"
+url = "https://github.com/ethereum/go-ethereum"
+ref = "v1.17.5"
+kind = "go-module"
+
+[[source]]
+name = "go-eth2-client"
+url = "https://github.com/attestantio/go-eth2-client"
+ref = "v0.29.0"
+kind = "go-module"
+
+[[source]]
+name = "execution-apis"
+url = "https://github.com/ethereum/execution-apis"
+ref = "e5d1bb60e6c064e4b15080da07b4370d0baadf92"
+kind = "vendored-spec"
+
+[[source]]
+name = "beacon-APIs"
+url = "https://github.com/ethereum/beacon-APIs"
+ref = "v3.0.0"
+commit = "9dd42193c02a91536a051c69d4818d4fd9c5bbcf"
+kind = "vendored-spec"
+
+[[source]]
+name = "consensus-specs"
+url = "https://github.com/ethereum/consensus-specs"
+ref = "v1.6.1"
+kind = "vendored-tests"

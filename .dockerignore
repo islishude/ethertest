@@ -1,0 +1,10 @@
+.git
+.github
+bin
+coverage
+dist
+state
+*.out
+*.test
+*.tar.zst
+.DS_Store

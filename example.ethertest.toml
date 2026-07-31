@@ -1,0 +1,31 @@
+[chain]
+chain_id = 31337
+network_id = 31337
+genesis_time = 1800000000
+slot_duration = "6s"
+slots_per_epoch = 8
+validators = 64
+gas_limit = 30000000
+
+[chain.forks]
+cancun_epoch = 0
+prague_epoch = 0
+osaka_epoch = 0
+
+[mining]
+mode = "transaction"
+order = "fees"
+
+[http]
+enabled = true
+address = "127.0.0.1:8545"
+cors = ["*"]
+
+[beacon]
+enabled = true
+address = "127.0.0.1:5052"
+cors = ["*"]
+
+[storage]
+engine = "memory"
+archive = true

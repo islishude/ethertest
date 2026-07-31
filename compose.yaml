@@ -1,0 +1,37 @@
+name: ethertest
+
+services:
+  node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ethertest:local
+    init: true
+    command:
+      - --http
+      - 0.0.0.0:8545
+      - --beacon
+      - 0.0.0.0:5052
+      - --allow-unsafe-external
+      - --data-dir
+      - /data
+      - --dump-state
+      - /state/ethertest-state.tar.zst
+    ports:
+      - "127.0.0.1:8545:8545"
+      - "127.0.0.1:5052:5052"
+    volumes:
+      - ethertest-data:/data
+      - ethertest-state:/state
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 15s
+
+volumes:
+  ethertest-data:
+  ethertest-state:

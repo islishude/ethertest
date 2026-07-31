@@ -1,0 +1,37 @@
+openapi: 3.0.3
+info:
+  title: ethertest Beacon API contract subset
+  version: 0.1.0
+  description: >
+    Paths implemented from ethereum/beacon-APIs v3.0.0. Upstream schemas remain
+    authoritative; this narrow offline contract records the supported surface.
+paths:
+  /eth/v1/beacon/genesis: {get: {responses: {'200': {description: Genesis}}}}
+  /eth/v1/config/spec: {get: {responses: {'200': {description: Spec values}}}}
+  /eth/v1/config/fork_schedule: {get: {responses: {'200': {description: Fork schedule}}}}
+  /eth/v1/node/health: {get: {responses: {'200': {description: Healthy}}}}
+  /eth/v1/node/syncing: {get: {responses: {'200': {description: Sync status}}}}
+  /eth/v1/beacon/headers/{block_id}:
+    get:
+      parameters: [{$ref: '#/components/parameters/BlockID'}]
+      responses: {'200': {description: Signed beacon block header}}
+  /eth/v1/beacon/blocks/{block_id}:
+    get:
+      parameters: [{$ref: '#/components/parameters/BlockID'}]
+      responses: {'200': {description: Signed beacon block in JSON or SSZ}}
+  /eth/v1/beacon/blobs/{block_id}:
+    get:
+      parameters: [{$ref: '#/components/parameters/BlockID'}]
+      responses: {'200': {description: Blob sidecars}}
+  /eth/v1/beacon/data_column_sidecars/{block_id}:
+    get:
+      parameters: [{$ref: '#/components/parameters/BlockID'}]
+      responses: {'200': {description: Fulu data column sidecars in JSON or SSZ}}
+  /eth/v1/events: {get: {responses: {'200': {description: Server-sent events}}}}
+components:
+  parameters:
+    BlockID:
+      in: path
+      name: block_id
+      required: true
+      schema: {type: string}

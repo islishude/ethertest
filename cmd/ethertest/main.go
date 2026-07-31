@@ -1,0 +1,386 @@
+package main
+
+import (
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math/big"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/BurntSushi/toml"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto/kzg4844"
+	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/islishude/ethertest"
+	"github.com/urfave/cli/v2"
+)
+
+func main() {
+	app := &cli.App{
+		Name: "ethertest", Usage: "local execution and consensus test node",
+		Version: ethertest.Version, EnableBashCompletion: true,
+		Flags:  commonFlags(),
+		Action: runNode,
+		Commands: []*cli.Command{
+			configCommand(), networkCommand(), blobCommand(), stateCommand(),
+			accountsCommand(), capabilitiesCommand(), completionCommand(),
+		},
+	}
+	if err := app.Run(os.Args); err != nil {
+		fmt.Fprintln(os.Stderr, "ethertest:", err)
+		os.Exit(1)
+	}
+}
+
+func commonFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{Name: "config", Usage: "strict TOML configuration file"},
+		&cli.Uint64Flag{Name: "chain-id"},
+		&cli.Int64Flag{Name: "genesis-time"},
+		&cli.StringFlag{Name: "http", Usage: "EL HTTP+WS listen address"},
+		&cli.StringFlag{Name: "beacon", Usage: "Beacon REST+SSE listen address"},
+		&cli.BoolFlag{Name: "no-http"},
+		&cli.BoolFlag{Name: "no-beacon"},
+		&cli.BoolFlag{Name: "allow-unsafe-external"},
+		&cli.StringFlag{Name: "data-dir", Usage: "enable Pebble at this directory"},
+		&cli.StringFlag{Name: "dump-state", Usage: "atomically dump state on shutdown"},
+	}
+}
+
+func effectiveConfig(ctx *cli.Context) (ethertest.Config, error) {
+	cfg, err := ethertest.ReadConfig(ctx.String("config"))
+	if err != nil {
+		return ethertest.Config{}, err
+	}
+	if ctx.IsSet("chain-id") {
+		cfg.Chain.ChainID, cfg.Chain.NetworkID = ctx.Uint64("chain-id"), ctx.Uint64("chain-id")
+	}
+	if ctx.IsSet("genesis-time") {
+		cfg.Chain.GenesisTime = ctx.Int64("genesis-time")
+	}
+	if ctx.IsSet("http") {
+		cfg.HTTP.Address = ctx.String("http")
+	}
+	if ctx.IsSet("beacon") {
+		cfg.Beacon.Address = ctx.String("beacon")
+	}
+	if ctx.Bool("no-http") {
+		cfg.HTTP.Enabled = false
+	}
+	if ctx.Bool("no-beacon") {
+		cfg.Beacon.Enabled = false
+	}
+	if ctx.Bool("allow-unsafe-external") {
+		cfg.HTTP.AllowUnsafeExternal, cfg.Beacon.AllowUnsafeExternal = true, true
+	}
+	if ctx.IsSet("data-dir") {
+		cfg.Storage.Engine, cfg.Storage.Path = "pebble", ctx.String("data-dir")
+	}
+	if ctx.IsSet("dump-state") {
+		cfg.DumpState = ctx.String("dump-state")
+	}
+	if cfg.Chain.GenesisTime == 0 {
+		cfg.Chain.GenesisTime = time.Now().UTC().Unix()
+	}
+	return cfg, cfg.Validate()
+}
+
+func runNode(ctx *cli.Context) error {
+	cfg, err := effectiveConfig(ctx)
+	if err != nil {
+		return err
+	}
+	node, err := ethertest.New(cfg)
+	if err != nil {
+		return err
+	}
+	if err := node.Start(); err != nil {
+		return err
+	}
+	printSummary(cfg)
+	signalContext, stop := signal.NotifyContext(ctx.Context, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	<-signalContext.Done()
+	return node.Close()
+}
+
+func printSummary(cfg ethertest.Config) {
+	if cfg.Log.JSON {
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"event": "startup", "version": ethertest.Version,
+			"chain_id": cfg.Chain.ChainID, "fork": "osaka/fulu",
+			"synthetic_finality": true,
+			"execution_endpoint": cfg.HTTP.Address,
+			"beacon_endpoint":    cfg.Beacon.Address,
+		})
+		return
+	}
+	accounts, _ := ethertest.DeriveAccounts(cfg.Accounts.Mnemonic, cfg.Accounts.Count)
+	fmt.Printf("ethertest %s  chain=%d  fork=Osaka/Fulu  finality=synthetic\n", ethertest.Version, cfg.Chain.ChainID)
+	if cfg.HTTP.Enabled {
+		scheme := "http"
+		if cfg.HTTP.TLS.CertFile != "" {
+			scheme = "https"
+		}
+		fmt.Printf("EL HTTP+WS: %s://%s\n", scheme, cfg.HTTP.Address)
+	}
+	if cfg.Beacon.Enabled {
+		scheme := "http"
+		if cfg.Beacon.TLS.CertFile != "" {
+			scheme = "https"
+		}
+		fmt.Printf("Beacon REST+SSE: %s://%s\n", scheme, cfg.Beacon.Address)
+	}
+	fmt.Println("Unlocked development accounts (never use these keys on a real network):")
+	for index, account := range accounts {
+		fmt.Printf("  (%d) %s  %s  %s\n", index, account.Address, hex.EncodeToString(crypto.FromECDSA(account.PrivateKey)), account.Path)
+	}
+}
+
+func configCommand() *cli.Command {
+	return &cli.Command{
+		Name: "config", Subcommands: []*cli.Command{
+			{Name: "print", Action: func(ctx *cli.Context) error {
+				cfg, err := effectiveConfig(ctx)
+				if err != nil {
+					return err
+				}
+				return toml.NewEncoder(os.Stdout).Encode(cfg)
+			}},
+			{Name: "validate", Action: func(ctx *cli.Context) error {
+				_, err := effectiveConfig(ctx)
+				if err == nil {
+					fmt.Println("configuration is valid")
+				}
+				return err
+			}},
+		},
+	}
+}
+
+func networkCommand() *cli.Command {
+	return &cli.Command{Name: "network", Flags: []cli.Flag{&cli.BoolFlag{Name: "json"}}, Action: func(ctx *cli.Context) error {
+		cfg, err := effectiveConfig(ctx)
+		if err != nil {
+			return err
+		}
+		value := map[string]any{
+			"chainId": cfg.Chain.ChainID, "networkId": cfg.Chain.NetworkID,
+			"genesisTime": cfg.Chain.GenesisTime, "fork": "osaka/fulu",
+			"execution": cfg.HTTP.Address, "consensus": cfg.Beacon.Address,
+			"syntheticFinality": true,
+		}
+		return json.NewEncoder(os.Stdout).Encode(value)
+	}}
+}
+
+func blobCommand() *cli.Command {
+	return &cli.Command{Name: "blob", Subcommands: []*cli.Command{
+		{Name: "encode", Usage: "encode payload-file blob-file", Flags: []cli.Flag{
+			&cli.StringFlag{Name: "codec", Value: "packed-bytes-v1"},
+		}, Action: blobEncode},
+		{Name: "decode", Usage: "decode blob-file payload-file", Action: blobDecode},
+		{Name: "send", Usage: "send payload-file", Flags: []cli.Flag{
+			&cli.StringFlag{Name: "rpc", Value: "http://127.0.0.1:8545"},
+			&cli.IntFlag{Name: "account", Value: 0},
+			&cli.StringFlag{Name: "to", Value: "0x0000000000000000000000000000000000000000"},
+		}, Action: blobSend},
+	}}
+}
+
+func blobEncode(ctx *cli.Context) error {
+	if ctx.NArg() != 2 {
+		return cli.Exit("usage: ethertest blob encode PAYLOAD BLOB", 2)
+	}
+	input, err := os.ReadFile(ctx.Args().Get(0))
+	if err != nil {
+		return err
+	}
+	var blob kzg4844.Blob
+	switch ctx.String("codec") {
+	case "packed-bytes-v1":
+		blob, err = ethertest.EncodePackedBytesV1(input)
+	case "canonical-blob":
+		if len(input) != len(blob) {
+			return fmt.Errorf("canonical blob must be exactly %d bytes", len(blob))
+		}
+		copy(blob[:], input)
+	default:
+		return errors.New("unsupported blob codec")
+	}
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(ctx.Args().Get(1), blob[:], 0o600)
+}
+
+func blobDecode(ctx *cli.Context) error {
+	if ctx.NArg() != 2 {
+		return cli.Exit("usage: ethertest blob decode BLOB PAYLOAD", 2)
+	}
+	input, err := os.ReadFile(ctx.Args().Get(0))
+	if err != nil {
+		return err
+	}
+	if len(input) != len(kzg4844.Blob{}) {
+		return errors.New("invalid canonical blob length")
+	}
+	var blob kzg4844.Blob
+	copy(blob[:], input)
+	payload, err := ethertest.DecodePackedBytesV1(blob)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(ctx.Args().Get(1), payload, 0o600)
+}
+
+func blobSend(ctx *cli.Context) error {
+	if ctx.NArg() != 1 {
+		return cli.Exit("usage: ethertest blob send PAYLOAD", 2)
+	}
+	payload, err := os.ReadFile(ctx.Args().First())
+	if err != nil {
+		return err
+	}
+	blob, err := ethertest.EncodePackedBytesV1(payload)
+	if err != nil {
+		return err
+	}
+	accounts, err := ethertest.DeriveAccounts(ethertest.DefaultMnemonic, 10)
+	if err != nil || ctx.Int("account") < 0 || ctx.Int("account") >= len(accounts) {
+		return errors.New("invalid account")
+	}
+	client, err := rpc.DialContext(ctx.Context, ctx.String("rpc"))
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	account := accounts[ctx.Int("account")]
+	var nonce hexutil.Uint64
+	if err := client.CallContext(ctx.Context, &nonce, "eth_getTransactionCount", account.Address, "pending"); err != nil {
+		return err
+	}
+	var chainID hexutil.Uint64
+	if err := client.CallContext(ctx.Context, &chainID, "eth_chainId"); err != nil {
+		return err
+	}
+	tx, err := ethertest.SignBlobTransaction(ethertest.BlobTransactionRequest{
+		ChainID: new(big.Int).SetUint64(uint64(chainID)), Nonce: uint64(nonce),
+		To: common.HexToAddress(ctx.String("to")), Gas: 100_000,
+		GasTipCap: big.NewInt(1_000_000_000), GasFeeCap: big.NewInt(3_000_000_000),
+		BlobFeeCap: big.NewInt(1_000_000_000), Blob: blob,
+	}, account.PrivateKey)
+	if err != nil {
+		return err
+	}
+	raw, err := tx.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	var hash common.Hash
+	if err := client.CallContext(ctx.Context, &hash, "eth_sendRawTransaction", hexutil.Bytes(raw)); err != nil {
+		return err
+	}
+	fmt.Println(hash)
+	return nil
+}
+
+func stateCommand() *cli.Command {
+	return &cli.Command{Name: "state", Subcommands: []*cli.Command{
+		{Name: "inspect", Action: func(ctx *cli.Context) error {
+			if ctx.NArg() != 1 {
+				return cli.Exit("usage: ethertest state inspect ARCHIVE", 2)
+			}
+			manifest, err := ethertest.InspectState(ctx.Args().First())
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(manifest)
+		}},
+		{Name: "dump", Action: func(ctx *cli.Context) error {
+			if ctx.NArg() != 1 {
+				return cli.Exit("usage: ethertest state dump ARCHIVE --data-dir DIR", 2)
+			}
+			cfg, err := effectiveConfig(ctx)
+			if err != nil {
+				return err
+			}
+			cfg.HTTP.Enabled, cfg.Beacon.Enabled = false, false
+			node, err := ethertest.New(cfg)
+			if err != nil {
+				return err
+			}
+			defer node.Close() //nolint:errcheck
+			return node.DumpState(ctx.Args().First())
+		}},
+		{Name: "load", Flags: []cli.Flag{&cli.StringFlag{Name: "to", Required: true}}, Action: func(ctx *cli.Context) error {
+			if ctx.NArg() != 1 {
+				return cli.Exit("usage: ethertest state load ARCHIVE --to DIR", 2)
+			}
+			return ethertest.LoadState(ctx.Args().First(), ctx.String("to"))
+		}},
+		{Name: "migrate", Action: func(ctx *cli.Context) error {
+			if ctx.NArg() != 1 {
+				return cli.Exit("usage: ethertest state migrate ARCHIVE", 2)
+			}
+			return ethertest.MigrateState(ctx.Args().First())
+		}},
+	}}
+}
+
+func accountsCommand() *cli.Command {
+	return &cli.Command{Name: "accounts", Subcommands: []*cli.Command{
+		{Name: "export", Flags: []cli.Flag{&cli.BoolFlag{Name: "unsafe-plain"}}, Action: func(ctx *cli.Context) error {
+			if !ctx.Bool("unsafe-plain") {
+				return errors.New("refusing plaintext key export without --unsafe-plain")
+			}
+			cfg, err := effectiveConfig(ctx)
+			if err != nil {
+				return err
+			}
+			accounts, err := ethertest.DeriveAccounts(cfg.Accounts.Mnemonic, cfg.Accounts.Count)
+			if err != nil {
+				return err
+			}
+			for _, account := range accounts {
+				fmt.Printf("%s %s %s\n", account.Address, hex.EncodeToString(crypto.FromECDSA(account.PrivateKey)), account.Path)
+			}
+			return nil
+		}},
+	}}
+}
+
+func capabilitiesCommand() *cli.Command {
+	return &cli.Command{Name: "capabilities", Action: func(*cli.Context) error {
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"version": ethertest.Version, "status": "alpha", "fork": "osaka/fulu",
+			"syntheticFinality": true, "blobCodec": []string{"canonical-blob", "packed-bytes-v1"},
+			"forkTransitions": []string{"deneb", "electra", "fulu"},
+			"releaseComplete": false,
+		})
+	}}
+}
+
+func completionCommand() *cli.Command {
+	return &cli.Command{Name: "completion", Action: func(ctx *cli.Context) error {
+		shell := ctx.Args().First()
+		switch shell {
+		case "bash":
+			fmt.Println(`complete -o bashdefault -o default -o nospace -C ethertest ethertest`)
+		case "zsh":
+			fmt.Println(`#compdef ethertest
+_ethertest() { local -a commands; commands=(config network blob state accounts capabilities completion); _describe commands commands; }`)
+		case "fish":
+			fmt.Println(`complete -c ethertest -f -a "config network blob state accounts capabilities completion"`)
+		default:
+			return errors.New("completion shell must be bash, zsh, or fish")
+		}
+		return nil
+	}}
+}

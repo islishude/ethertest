@@ -1,0 +1,28 @@
+version: 2
+
+builds:
+  - id: ethertest
+    main: ./cmd/ethertest
+    binary: ethertest
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  use: git

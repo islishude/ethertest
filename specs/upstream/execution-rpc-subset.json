@@ -1,0 +1,16 @@
+{
+  "source": "ethereum/execution-apis@e5d1bb60e6c064e4b15080da07b4370d0baadf92",
+  "namespaces": {
+    "eth": [
+      "accounts", "blockNumber", "call", "chainId", "estimateGas", "getBalance",
+      "getBlockByHash", "getBlockByNumber", "getCode", "getFilterChanges",
+      "getFilterLogs", "getLogs", "getProof", "getStorageAt",
+      "getTransactionByHash", "getTransactionCount", "getTransactionReceipt",
+      "newFilter", "sendRawTransaction", "sendTransaction", "subscribe",
+      "uninstallFilter"
+    ],
+    "net": ["listening", "peerCount", "version"],
+    "web3": ["clientVersion", "sha3"]
+  },
+  "deliberately_absent": ["engine", "graphql", "ipc"]
+}

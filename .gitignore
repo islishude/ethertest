@@ -1,0 +1,8 @@
+/bin/
+/dist/
+/coverage/
+/*.test
+/*.out
+/.DS_Store
+/ethertest.toml
+/state/
