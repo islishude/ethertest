@@ -26,8 +26,8 @@ kind = "vendored-spec"
 [[source]]
 name = "beacon-APIs"
 url = "https://github.com/ethereum/beacon-APIs"
-ref = "v3.0.0"
-commit = "9dd42193c02a91536a051c69d4818d4fd9c5bbcf"
+ref = "v4.0.0"
+commit = "88fc9402c6a1821b6e9ae4e3b8ae0a22f1141203"
 kind = "vendored-spec"
 
 [[source]]

@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/attestantio/go-eth2-client/spec/deneb"
@@ -96,7 +97,7 @@ func TestOsakaBlobTransactionRejectsBadProofAndMinesValidSidecar(t *testing.T) {
 
 	request := httptest.NewRequest(http.MethodGet, "/eth/v1/beacon/blob_sidecars/head?indices=0", nil)
 	response := httptest.NewRecorder()
-	node.beaconBlobs(response, request)
+	node.beaconHandler().ServeHTTP(response, request)
 	var envelope struct {
 		Data []*deneb.BlobSidecar `json:"data"`
 	}
@@ -120,10 +121,13 @@ func TestOsakaBlobTransactionRejectsBadProofAndMinesValidSidecar(t *testing.T) {
 	request = httptest.NewRequest(http.MethodGet, "/eth/v1/beacon/blob_sidecars/head", nil)
 	request.Header.Set("Accept", "application/octet-stream")
 	response = httptest.NewRecorder()
-	node.beaconBlobs(response, request)
+	node.beaconHandler().ServeHTTP(response, request)
 	encoded, err := io.ReadAll(response.Result().Body)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if response.Header().Get("Eth-Consensus-Version") == "" {
+		t.Fatal("SSZ sidecar response is missing Eth-Consensus-Version")
 	}
 	var decoded deneb.BlobSidecar
 	if err := decoded.UnmarshalSSZ(encoded); err != nil {
@@ -131,6 +135,226 @@ func TestOsakaBlobTransactionRejectsBadProofAndMinesValidSidecar(t *testing.T) {
 	}
 	if decoded.Index != 0 || decoded.KZGCommitment != envelope.Data[0].KZGCommitment {
 		t.Fatal("SSZ sidecar differs from JSON sidecar")
+	}
+}
+
+func TestBeaconBlobsFiltersByVersionedHashAndPreservesBlockOrder(t *testing.T) {
+	cfg := testConfig()
+	cfg.Mining.Mode = "manual"
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+
+	accounts, err := DeriveAccounts(DefaultMnemonic, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloads := [][]byte{[]byte("first blob"), []byte("second blob")}
+	blobs := make([]kzg4844.Blob, len(payloads))
+	hashes := make([]common.Hash, len(payloads))
+	txHashes := make([]common.Hash, len(payloads))
+	for index, payload := range payloads {
+		blobs[index], err = EncodePackedBytesV1(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx, err := SignBlobTransaction(BlobTransactionRequest{
+			ChainID: new(big.Int).SetUint64(DefaultChainID), Nonce: uint64(index),
+			To: common.Address{}, Gas: 100_000,
+			GasTipCap: big.NewInt(1_000_000_000), GasFeeCap: big.NewInt(3_000_000_000),
+			BlobFeeCap: big.NewInt(1_000_000_000), Blob: blobs[index],
+		}, accounts[0].PrivateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		txHashes[index] = tx.Hash()
+		hashes[index] = tx.BlobTxSidecar().BlobHashes()[0]
+		if _, err := node.SendTransaction(context.Background(), tx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := node.Mine(context.Background(), 1, false); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := node.beaconHandler()
+	getJSON := func(target string) beaconBlobsEnvelope {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s returned %d: %s", target, response.Code, response.Body.String())
+		}
+		var envelope beaconBlobsEnvelope
+		if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		return envelope
+	}
+	assertBlobs := func(got []deneb.Blob, want ...kzg4844.Blob) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("got %d blobs, want %d", len(got), len(want))
+		}
+		for index := range want {
+			if !bytes.Equal(got[index][:], want[index][:]) {
+				t.Fatalf("blob %d differs", index)
+			}
+		}
+	}
+
+	envelope := getJSON("/eth/v1/beacon/blobs/head")
+	if envelope.ExecutionOptimistic || envelope.Finalized {
+		t.Fatalf("unexpected blob metadata: %#v", envelope)
+	}
+	assertBlobs(envelope.Data, blobs[0], blobs[1])
+	genesisEnvelope := getJSON("/eth/v1/beacon/blobs/genesis")
+	if genesisEnvelope.ExecutionOptimistic || !genesisEnvelope.Finalized {
+		t.Fatalf("unexpected genesis blob metadata: %#v", genesisEnvelope)
+	}
+	assertBlobs(genesisEnvelope.Data)
+
+	envelope = getJSON("/eth/v1/beacon/blobs/head?versioned_hashes=" +
+		hashes[1].Hex() + "&versioned_hashes=" + hashes[0].Hex())
+	assertBlobs(envelope.Data, blobs[0], blobs[1])
+
+	var unknown common.Hash
+	unknown[0] = 1
+	unknown[len(unknown)-1] = 0xff
+	envelope = getJSON("/eth/v1/beacon/blobs/head?versioned_hashes=" +
+		unknown.Hex() + "&versioned_hashes=" + hashes[1].Hex())
+	assertBlobs(envelope.Data, blobs[1])
+	envelope = getJSON("/eth/v1/beacon/blobs/head?versioned_hashes=" + unknown.Hex())
+	assertBlobs(envelope.Data)
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/eth/v1/beacon/blobs/head?versioned_hashes="+hashes[1].Hex(),
+		nil,
+	)
+	request.Header.Set("Accept", "application/octet-stream")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/octet-stream" {
+		t.Fatalf("SSZ response status=%d content-type=%q", response.Code, response.Header().Get("Content-Type"))
+	}
+	if !bytes.Equal(response.Body.Bytes(), blobs[1][:]) {
+		t.Fatal("filtered SSZ blob differs")
+	}
+
+	request = httptest.NewRequest(
+		http.MethodGet,
+		"/eth/v1/beacon/blobs/head?versioned_hashes="+unknown.Hex(),
+		nil,
+	)
+	request.Header.Set("Accept", "application/octet-stream")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.Len() != 0 {
+		t.Fatalf("empty SSZ response status=%d size=%d", response.Code, response.Body.Len())
+	}
+
+	node.chain.mu.Lock()
+	corrupt := node.chain.blobs[txHashes[0]].Copy()
+	corrupt.Commitments = nil
+	node.chain.blobs[txHashes[0]] = corrupt
+	node.chain.mu.Unlock()
+	request = httptest.NewRequest(http.MethodGet, "/eth/v1/beacon/blobs/head", nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("corrupt sidecar returned %d, want 500", response.Code)
+	}
+}
+
+func TestBeaconBlobsRejectsInvalidVersionedHashes(t *testing.T) {
+	node, err := New(testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+
+	valid := common.Hash{1}.Hex()
+	tests := []string{
+		"versioned_hashes=",
+		"versioned_hashes=" + strings.TrimPrefix(valid, "0x"),
+		"versioned_hashes=0x01",
+		"versioned_hashes=0x" + strings.Repeat("g", 64),
+		"versioned_hashes=" + valid + "&versioned_hashes=" + valid,
+		"versioned_hashes=" + valid + "," + valid,
+	}
+	handler := node.beaconHandler()
+	for _, query := range tests {
+		request := httptest.NewRequest(http.MethodGet, "/eth/v1/beacon/blobs/genesis?"+query, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("%q returned %d, want 400", query, response.Code)
+		}
+	}
+}
+
+func TestBeaconServeMuxPatternsAreExactAndPopulatePathValues(t *testing.T) {
+	node, err := New(testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+
+	handler := node.beaconHandler()
+	genesis := node.chain.blockchain.Genesis()
+	root, err := node.beaconRoot(genesis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"genesis", "0", common.Hash(root).Hex()} {
+		request := httptest.NewRequest(http.MethodGet, "/eth/v1/beacon/headers/"+id, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("header ID %q returned %d: %s", id, response.Code, response.Body.String())
+		}
+	}
+	for _, path := range []string{
+		"/eth/v1/beacon/blocks/genesis",
+		"/eth/v1/beacon/states/genesis/validators",
+		"/eth/v1/beacon/states/genesis/validator_balances",
+		"/eth/v1/beacon/states/genesis/finality_checkpoints",
+		"/eth/v1/beacon/blobs/genesis",
+		"/eth/v1/beacon/blob_sidecars/genesis",
+		"/eth/v1/beacon/data_column_sidecars/genesis",
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Errorf("%s returned %d: %s", path, response.Code, response.Body.String())
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/eth/v1/beacon/headers/genesis/extra", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("extra path returned %d, want 404", response.Code)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/eth/v1/beacon/headers/genesis", nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST returned %d, want 405", response.Code)
 	}
 }
 

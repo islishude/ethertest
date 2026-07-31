@@ -24,20 +24,28 @@ type beaconEnvelope struct {
 	Data any `json:"data"`
 }
 
+type beaconBlobsEnvelope struct {
+	ExecutionOptimistic bool         `json:"execution_optimistic"`
+	Finalized           bool         `json:"finalized"`
+	Data                []deneb.Blob `json:"data"`
+}
+
 func (n *Node) beaconHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/eth/v1/node/health", n.beaconHealth)
-	mux.HandleFunc("/eth/v1/node/syncing", n.beaconSyncing)
-	mux.HandleFunc("/eth/v1/beacon/genesis", n.beaconGenesis)
-	mux.HandleFunc("/eth/v1/config/spec", n.beaconSpec)
-	mux.HandleFunc("/eth/v1/config/fork_schedule", n.beaconForkSchedule)
-	mux.HandleFunc("/eth/v1/beacon/headers/", n.beaconHeader)
-	mux.HandleFunc("/eth/v1/beacon/blocks/", n.beaconBlock)
-	mux.HandleFunc("/eth/v1/beacon/states/", n.beaconState)
-	mux.HandleFunc("/eth/v1/beacon/blobs/", n.beaconBlobs)
-	mux.HandleFunc("/eth/v1/beacon/blob_sidecars/", n.beaconBlobs)
-	mux.HandleFunc("/eth/v1/beacon/data_column_sidecars/", n.beaconDataColumns)
-	mux.HandleFunc("/eth/v1/events", n.beaconEvents)
+	mux.HandleFunc("GET /eth/v1/node/health", n.beaconHealth)
+	mux.HandleFunc("GET /eth/v1/node/syncing", n.beaconSyncing)
+	mux.HandleFunc("GET /eth/v1/beacon/genesis", n.beaconGenesis)
+	mux.HandleFunc("GET /eth/v1/config/spec", n.beaconSpec)
+	mux.HandleFunc("GET /eth/v1/config/fork_schedule", n.beaconForkSchedule)
+	mux.HandleFunc("GET /eth/v1/beacon/headers/{block_id}", n.beaconHeader)
+	mux.HandleFunc("GET /eth/v1/beacon/blocks/{block_id}", n.beaconBlock)
+	mux.HandleFunc("GET /eth/v1/beacon/states/{state_id}/validators", n.beaconValidators)
+	mux.HandleFunc("GET /eth/v1/beacon/states/{state_id}/validator_balances", n.beaconValidatorBalances)
+	mux.HandleFunc("GET /eth/v1/beacon/states/{state_id}/finality_checkpoints", n.beaconFinalityCheckpoints)
+	mux.HandleFunc("GET /eth/v1/beacon/blobs/{block_id}", n.beaconBlobs)
+	mux.HandleFunc("GET /eth/v1/beacon/blob_sidecars/{block_id}", n.beaconBlobSidecars)
+	mux.HandleFunc("GET /eth/v1/beacon/data_column_sidecars/{block_id}", n.beaconDataColumns)
+	mux.HandleFunc("GET /eth/v1/events", n.beaconEvents)
 	return mux
 }
 
@@ -89,7 +97,7 @@ func (n *Node) beaconForkSchedule(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (n *Node) beaconHeader(w http.ResponseWriter, r *http.Request) {
-	block, err := n.beaconBlockID(strings.TrimPrefix(r.URL.Path, "/eth/v1/beacon/headers/"))
+	block, err := n.beaconBlockID(r.PathValue("block_id"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -109,7 +117,7 @@ func (n *Node) beaconHeader(w http.ResponseWriter, r *http.Request) {
 }
 
 func (n *Node) beaconBlock(w http.ResponseWriter, r *http.Request) {
-	block, err := n.beaconBlockID(strings.TrimPrefix(r.URL.Path, "/eth/v1/beacon/blocks/"))
+	block, err := n.beaconBlockID(r.PathValue("block_id"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -134,26 +142,8 @@ func (n *Node) beaconBlock(w http.ResponseWriter, r *http.Request) {
 	writeBeacon(w, http.StatusOK, signed.value())
 }
 
-func (n *Node) beaconState(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/eth/v1/beacon/states/")
-	parts := strings.Split(path, "/")
-	if len(parts) < 2 {
-		http.NotFound(w, r)
-		return
-	}
-	switch parts[1] {
-	case "validators":
-		n.beaconValidators(w)
-		return
-	case "validator_balances":
-		n.beaconValidatorBalances(w)
-		return
-	case "finality_checkpoints":
-	default:
-		http.NotFound(w, r)
-		return
-	}
-	block, err := n.beaconBlockID(parts[0])
+func (n *Node) beaconFinalityCheckpoints(w http.ResponseWriter, r *http.Request) {
+	block, err := n.beaconBlockID(r.PathValue("state_id"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -178,7 +168,11 @@ func (n *Node) beaconState(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (n *Node) beaconValidators(w http.ResponseWriter) {
+func (n *Node) beaconValidators(w http.ResponseWriter, r *http.Request) {
+	if _, err := n.beaconBlockID(r.PathValue("state_id")); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
 	validators := make([]map[string]any, len(n.consensus.pubkeys))
 	for index := range n.consensus.pubkeys {
 		validators[index] = map[string]any{
@@ -196,7 +190,11 @@ func (n *Node) beaconValidators(w http.ResponseWriter) {
 	writeBeacon(w, http.StatusOK, validators)
 }
 
-func (n *Node) beaconValidatorBalances(w http.ResponseWriter) {
+func (n *Node) beaconValidatorBalances(w http.ResponseWriter, r *http.Request) {
+	if _, err := n.beaconBlockID(r.PathValue("state_id")); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
 	balances := make([]map[string]string, len(n.consensus.pubkeys))
 	for index := range n.consensus.pubkeys {
 		balances[index] = map[string]string{"index": strconv.Itoa(index), "balance": "32000000000"}
@@ -205,9 +203,53 @@ func (n *Node) beaconValidatorBalances(w http.ResponseWriter) {
 }
 
 func (n *Node) beaconBlobs(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/eth/v1/beacon/blobs/")
-	id = strings.TrimPrefix(id, "/eth/v1/beacon/blob_sidecars/")
-	block, err := n.beaconBlockID(id)
+	block, err := n.beaconBlockID(r.PathValue("block_id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	selected, err := requestedVersionedHashes(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	items := make([]deneb.Blob, 0)
+	for _, tx := range block.Transactions() {
+		sidecar := n.chain.blobSidecar(tx.Hash())
+		if sidecar == nil {
+			continue
+		}
+		hashes := sidecar.BlobHashes()
+		if len(sidecar.Blobs) != len(hashes) {
+			http.Error(w, "stored blob sidecar fields have inconsistent lengths", http.StatusInternalServerError)
+			return
+		}
+		for index, blob := range sidecar.Blobs {
+			if len(selected) != 0 {
+				if _, exists := selected[hashes[index]]; !exists {
+					continue
+				}
+			}
+			items = append(items, deneb.Blob(blob))
+		}
+	}
+	if strings.Contains(r.Header.Get("Accept"), "application/octet-stream") {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		for index := range items {
+			_, _ = w.Write(items[index][:])
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(beaconBlobsEnvelope{
+		ExecutionOptimistic: false,
+		Finalized:           n.beaconBlockFinalized(block),
+		Data:                items,
+	})
+}
+
+func (n *Node) beaconBlobSidecars(w http.ResponseWriter, r *http.Request) {
+	block, err := n.beaconBlockID(r.PathValue("block_id"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -276,7 +318,7 @@ func (n *Node) beaconBlobs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (n *Node) beaconDataColumns(w http.ResponseWriter, r *http.Request) {
-	block, err := n.beaconBlockID(strings.TrimPrefix(r.URL.Path, "/eth/v1/beacon/data_column_sidecars/"))
+	block, err := n.beaconBlockID(r.PathValue("block_id"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -418,6 +460,39 @@ func requestedIndices(r *http.Request) (map[uint64]bool, error) {
 		indices[parsed] = true
 	}
 	return indices, nil
+}
+
+func requestedVersionedHashes(r *http.Request) (map[common.Hash]struct{}, error) {
+	values := r.URL.Query()["versioned_hashes"]
+	if len(values) == 0 {
+		return nil, nil
+	}
+	hashes := make(map[common.Hash]struct{}, len(values))
+	for _, value := range values {
+		if !strings.HasPrefix(value, "0x") || len(value) != 2+2*common.HashLength {
+			return nil, fmt.Errorf("invalid versioned hash %q", value)
+		}
+		var hash common.Hash
+		if err := hash.UnmarshalText([]byte(value)); err != nil {
+			return nil, fmt.Errorf("invalid versioned hash %q", value)
+		}
+		if _, exists := hashes[hash]; exists {
+			return nil, fmt.Errorf("duplicate versioned hash %q", value)
+		}
+		hashes[hash] = struct{}{}
+	}
+	return hashes, nil
+}
+
+func (n *Node) beaconBlockFinalized(block *types.Block) bool {
+	if n.chain.blockchain.GetCanonicalHash(block.NumberU64()) != block.Hash() {
+		return false
+	}
+	finalizedSlot := uint64(0)
+	if currentSlot := n.chain.currentSlot(); currentSlot > 2*n.cfg.Chain.SlotsPerEpoch {
+		finalizedSlot = currentSlot - 2*n.cfg.Chain.SlotsPerEpoch
+	}
+	return n.chain.slotOf(block) <= finalizedSlot
 }
 
 func marshalDataColumnSSZ(

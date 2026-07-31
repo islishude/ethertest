@@ -3,7 +3,7 @@ info:
   title: ethertest Beacon API contract subset
   version: 0.1.0
   description: >
-    Paths implemented from ethereum/beacon-APIs v3.0.0. Upstream schemas remain
+    Paths implemented from ethereum/beacon-APIs v4.0.0. Upstream schemas remain
     authoritative; this narrow offline contract records the supported surface.
 paths:
   /eth/v1/beacon/genesis: {get: {responses: {'200': {description: Genesis}}}}
@@ -21,7 +21,22 @@ paths:
       responses: {'200': {description: Signed beacon block in JSON or SSZ}}
   /eth/v1/beacon/blobs/{block_id}:
     get:
-      parameters: [{$ref: '#/components/parameters/BlockID'}]
+      parameters:
+        - {$ref: '#/components/parameters/BlockID'}
+        - {$ref: '#/components/parameters/VersionedHashes'}
+      responses:
+        '200':
+          description: Blobs in block commitment order
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BlobsResponse'}
+            application/octet-stream:
+              schema: {type: string, format: binary}
+  /eth/v1/beacon/blob_sidecars/{block_id}:
+    get:
+      parameters:
+        - {$ref: '#/components/parameters/BlockID'}
+        - {$ref: '#/components/parameters/Indices'}
       responses: {'200': {description: Blob sidecars}}
   /eth/v1/beacon/data_column_sidecars/{block_id}:
     get:
@@ -35,3 +50,33 @@ components:
       name: block_id
       required: true
       schema: {type: string}
+    VersionedHashes:
+      in: query
+      name: versioned_hashes
+      required: false
+      schema:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+          pattern: '^0x[a-fA-F0-9]{64}$'
+    Indices:
+      in: query
+      name: indices
+      required: false
+      schema:
+        type: array
+        uniqueItems: true
+        items: {type: string, pattern: '^[0-9]+$'}
+  schemas:
+    BlobsResponse:
+      type: object
+      required: [execution_optimistic, finalized, data]
+      properties:
+        execution_optimistic: {type: boolean}
+        finalized: {type: boolean}
+        data:
+          type: array
+          items:
+            type: string
+            pattern: '^0x[a-fA-F0-9]{262144}$'
