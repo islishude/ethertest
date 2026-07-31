@@ -25,17 +25,21 @@ import (
 const StateArchiveFormat = "ethertest-state-v1"
 
 type StateManifest struct {
-	Format         string `json:"format"`
-	Version        string `json:"version"`
-	CreatedAt      string `json:"created_at"`
-	ChainID        uint64 `json:"chain_id"`
-	GenesisHash    string `json:"genesis_hash"`
-	HeadHash       string `json:"head_hash"`
-	HeadNumber     uint64 `json:"head_number"`
-	Revision       uint64 `json:"revision"`
-	DatabaseSHA256 string `json:"database_sha256"`
-	Secrets        bool   `json:"secrets"`
-	Tainted        bool   `json:"tainted"`
+	Format           string   `json:"format"`
+	Version          string   `json:"version"`
+	CreatedAt        string   `json:"created_at"`
+	ChainID          uint64   `json:"chain_id"`
+	GenesisHash      string   `json:"genesis_hash"`
+	HeadHash         string   `json:"head_hash"`
+	HeadNumber       uint64   `json:"head_number"`
+	Revision         uint64   `json:"revision"`
+	DatabaseSHA256   string   `json:"database_sha256"`
+	Secrets          bool     `json:"secrets"`
+	Tainted          bool     `json:"tainted"`
+	HeadTainted      bool     `json:"head_tainted"`
+	TaintReasons     []string `json:"taint_reasons,omitempty"`
+	TimelineComplete bool     `json:"timeline_complete"`
+	ConsensusMode    string   `json:"consensus_mode"`
 }
 
 func (n *Node) DumpState(path string) error {
@@ -51,6 +55,16 @@ func (n *Node) DumpState(path string) error {
 func (n *Node) dumpState(path string) error {
 	n.chain.mu.RLock()
 	defer n.chain.mu.RUnlock()
+	if n.writeErr != nil {
+		return fmt.Errorf("cannot archive after a persistence failure: %w", n.writeErr)
+	}
+	prepared, err := n.chain.db.Has(journalKey)
+	if err != nil {
+		return fmt.Errorf("check recovery journal before archive: %w", err)
+	}
+	if prepared {
+		return errors.New("cannot archive while a prepared operation requires recovery")
+	}
 	database, err := encodeDatabase(n.chain.db)
 	if err != nil {
 		return err
@@ -63,6 +77,11 @@ func (n *Node) dumpState(path string) error {
 		ChainID: n.cfg.Chain.ChainID, GenesisHash: genesis.Hash().Hex(),
 		HeadHash: head.Hash().Hex(), HeadNumber: head.Number.Uint64(),
 		Revision: uint64(n.Revision()), DatabaseSHA256: hex.EncodeToString(sum[:]),
+		Tainted:          n.chain.sessionTainted,
+		HeadTainted:      n.chain.blockSafety[head.Hash()].Tainted,
+		TaintReasons:     sortedReasonSet(n.chain.taintReasons),
+		TimelineComplete: n.chain.timelineComplete,
+		ConsensusMode:    "synthetic",
 	}
 	if err := writeArchiveAtomic(path, manifest, database); err != nil {
 		return err
@@ -107,18 +126,6 @@ func LoadState(path, destination string) error {
 		return err
 	}
 	return db.Close()
-}
-
-func MigrateState(path string) error {
-	manifest, database, err := readArchive(path, true)
-	if err != nil {
-		return err
-	}
-	if manifest.Format != StateArchiveFormat {
-		return fmt.Errorf("unsupported state format %q", manifest.Format)
-	}
-	// v1 is already current. Rewriting is intentionally idempotent.
-	return writeArchiveAtomic(path, manifest, database)
 }
 
 func encodeDatabase(db ethdb.Database) ([]byte, error) {
@@ -277,6 +284,9 @@ func readArchive(path string, includeDatabase bool) (StateManifest, []byte, erro
 	}
 	if manifest.Format != StateArchiveFormat {
 		return StateManifest{}, nil, fmt.Errorf("unsupported or missing state format %q", manifest.Format)
+	}
+	if manifest.ConsensusMode != "synthetic" {
+		return StateManifest{}, nil, errors.New("archive predates the current in-place state layout")
 	}
 	if includeDatabase {
 		if database == nil {

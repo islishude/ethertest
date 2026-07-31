@@ -133,7 +133,7 @@ func TestBeaconJSONAndSSZContentNegotiation(t *testing.T) {
 		t.Fatalf("Beacon root is not hex: %q", envelope.Data.Root)
 	}
 
-	request, _ := http.NewRequest(http.MethodGet, endpoint+"/eth/v1/beacon/blocks/head", nil)
+	request, _ := http.NewRequest(http.MethodGet, endpoint+"/eth/v2/beacon/blocks/head", nil)
 	request.Header.Set("Accept", "application/octet-stream")
 	response, err = http.DefaultClient.Do(request)
 	if err != nil {

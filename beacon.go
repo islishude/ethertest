@@ -1,11 +1,14 @@
 package ethertest
 
+//go:generate go run ./internal/beaconcontractgen
+
 import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,14 +23,13 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-type beaconEnvelope struct {
-	Data any `json:"data"`
-}
-
+// beaconBlobsEnvelope remains the concrete test fixture type for the blobs
+// response; the handler emits the equivalent generated BeaconResponse shape.
 type beaconBlobsEnvelope struct {
 	ExecutionOptimistic bool         `json:"execution_optimistic"`
 	Finalized           bool         `json:"finalized"`
 	Data                []deneb.Blob `json:"data"`
+	EthertestTainted    bool         `json:"ethertest_tainted,omitempty"`
 }
 
 func (n *Node) beaconHandler() http.Handler {
@@ -38,21 +40,108 @@ func (n *Node) beaconHandler() http.Handler {
 	mux.HandleFunc("GET /eth/v1/config/spec", n.beaconSpec)
 	mux.HandleFunc("GET /eth/v1/config/fork_schedule", n.beaconForkSchedule)
 	mux.HandleFunc("GET /eth/v1/beacon/headers/{block_id}", n.beaconHeader)
-	mux.HandleFunc("GET /eth/v1/beacon/blocks/{block_id}", n.beaconBlock)
+	mux.HandleFunc("GET /eth/v2/beacon/blocks/{block_id}", n.beaconBlock)
 	mux.HandleFunc("GET /eth/v1/beacon/states/{state_id}/validators", n.beaconValidators)
 	mux.HandleFunc("GET /eth/v1/beacon/states/{state_id}/validator_balances", n.beaconValidatorBalances)
 	mux.HandleFunc("GET /eth/v1/beacon/states/{state_id}/finality_checkpoints", n.beaconFinalityCheckpoints)
 	mux.HandleFunc("GET /eth/v1/beacon/blobs/{block_id}", n.beaconBlobs)
 	mux.HandleFunc("GET /eth/v1/beacon/blob_sidecars/{block_id}", n.beaconBlobSidecars)
-	mux.HandleFunc("GET /eth/v1/beacon/data_column_sidecars/{block_id}", n.beaconDataColumns)
+	mux.HandleFunc("GET /eth/v1/debug/beacon/data_column_sidecars/{block_id}", n.beaconDataColumns)
 	mux.HandleFunc("GET /eth/v1/events", n.beaconEvents)
 	return mux
 }
 
 func writeBeacon(w http.ResponseWriter, status int, value any) {
+	writeBeaconJSON(w, status, BeaconDataEnvelope[any]{Data: value})
+}
+
+func writeBeaconJSON(w http.ResponseWriter, status int, value any) {
+	setSyntheticConsensusHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(beaconEnvelope{Data: value})
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writeBeaconError(w http.ResponseWriter, status int, err error) {
+	setSyntheticConsensusHeaders(w)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(BeaconErrorMessage{Code: status, Message: err.Error()})
+}
+
+func setSyntheticConsensusHeaders(w http.ResponseWriter) {
+	w.Header().Set("Ethertest-Consensus-Mode", "synthetic")
+}
+
+func (n *Node) beaconResponse(block *types.Block, value any) BeaconResponse[any] {
+	tainted := n.beaconLineageTainted(block)
+	return BeaconResponse[any]{
+		ExecutionOptimistic: tainted,
+		Finalized:           n.beaconBlockFinalized(block),
+		Data:                value,
+		EthertestTainted:    tainted,
+	}
+}
+
+func (n *Node) beaconVersionedResponse(block *types.Block, value any) BeaconVersionedResponse[any] {
+	tainted := n.beaconLineageTainted(block)
+	return BeaconVersionedResponse[any]{
+		Version:             n.consensus.forkName(n.chain.slotOf(block)),
+		ExecutionOptimistic: tainted,
+		Finalized:           n.beaconBlockFinalized(block),
+		Data:                value,
+		EthertestTainted:    tainted,
+	}
+}
+
+func (n *Node) beaconLineageTainted(block *types.Block) bool {
+	if block == nil {
+		return true
+	}
+	safety, err := n.BlockSafety(block.Hash())
+	return err != nil || safety.Tainted
+}
+
+func beaconBlockIDStatus(err error) int {
+	if strings.Contains(strings.ToLower(err.Error()), "invalid") {
+		return http.StatusBadRequest
+	}
+	return http.StatusNotFound
+}
+
+func beaconWantsSSZ(r *http.Request) (bool, error) {
+	accept := strings.TrimSpace(r.Header.Get("Accept"))
+	if accept == "" {
+		return false, nil
+	}
+	jsonQuality, sszQuality := -1.0, -1.0
+	for _, item := range strings.Split(accept, ",") {
+		mediaType, parameters, err := mime.ParseMediaType(strings.TrimSpace(item))
+		if err != nil {
+			return false, errors.New("invalid Accept header")
+		}
+		quality := 1.0
+		if raw := parameters["q"]; raw != "" {
+			quality, err = strconv.ParseFloat(raw, 64)
+			if err != nil || quality < 0 || quality > 1 {
+				return false, errors.New("invalid Accept quality")
+			}
+		}
+		switch mediaType {
+		case "application/json", "*/*", "application/*":
+			if quality > jsonQuality {
+				jsonQuality = quality
+			}
+		case "application/octet-stream":
+			if quality > sszQuality {
+				sszQuality = quality
+			}
+		}
+	}
+	if jsonQuality <= 0 && sszQuality <= 0 {
+		return false, errors.New("accepted media type not supported")
+	}
+	return sszQuality > jsonQuality, nil
 }
 
 func (n *Node) beaconHealth(w http.ResponseWriter, _ *http.Request) {
@@ -60,9 +149,11 @@ func (n *Node) beaconHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (n *Node) beaconSyncing(w http.ResponseWriter, _ *http.Request) {
+	head := n.chain.blockchain.GetBlockByHash(n.chain.blockchain.CurrentBlock().Hash())
 	writeBeacon(w, http.StatusOK, map[string]any{
 		"head_slot":     strconv.FormatUint(n.chain.currentSlot(), 10),
-		"sync_distance": "0", "is_syncing": false, "is_optimistic": false, "el_offline": false,
+		"sync_distance": "0", "is_syncing": false,
+		"is_optimistic": n.beaconLineageTainted(head), "el_offline": false,
 	})
 }
 
@@ -99,83 +190,92 @@ func (n *Node) beaconForkSchedule(w http.ResponseWriter, _ *http.Request) {
 func (n *Node) beaconHeader(w http.ResponseWriter, r *http.Request) {
 	block, err := n.beaconBlockID(r.PathValue("block_id"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeBeaconError(w, beaconBlockIDStatus(err), err)
 		return
 	}
 	header, err := n.consensus.signedHeader(n.chain, block)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeBeaconError(w, http.StatusInternalServerError, err)
 		return
 	}
 	root, err := header.Message.HashTreeRoot()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeBeaconError(w, http.StatusInternalServerError, err)
 		return
 	}
 	canonical := n.chain.blockchain.GetCanonicalHash(block.NumberU64()) == block.Hash()
-	writeBeacon(w, http.StatusOK, map[string]any{"root": common.Hash(root).Hex(), "canonical": canonical, "header": header})
+	w.Header().Set("Eth-Consensus-Version", n.consensus.forkName(n.chain.slotOf(block)))
+	writeBeaconJSON(w, http.StatusOK, n.beaconResponse(block, map[string]any{
+		"root": common.Hash(root).Hex(), "canonical": canonical, "header": header,
+	}))
 }
 
 func (n *Node) beaconBlock(w http.ResponseWriter, r *http.Request) {
 	block, err := n.beaconBlockID(r.PathValue("block_id"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeBeaconError(w, beaconBlockIDStatus(err), err)
 		return
 	}
 	signed, err := n.consensus.signedBlock(n.chain, block)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeBeaconError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if strings.Contains(r.Header.Get("Accept"), "application/octet-stream") {
+	ssz, err := beaconWantsSSZ(r)
+	if err != nil {
+		writeBeaconError(w, http.StatusNotAcceptable, err)
+		return
+	}
+	if ssz {
 		data, err := signed.marshalSSZ()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeBeaconError(w, http.StatusInternalServerError, err)
 			return
 		}
+		setSyntheticConsensusHeaders(w)
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Eth-Consensus-Version", n.consensus.forkName(n.chain.slotOf(block)))
 		_, _ = w.Write(data)
 		return
 	}
 	w.Header().Set("Eth-Consensus-Version", n.consensus.forkName(n.chain.slotOf(block)))
-	writeBeacon(w, http.StatusOK, signed.value())
+	writeBeaconJSON(w, http.StatusOK, n.beaconVersionedResponse(block, signed.value()))
 }
 
 func (n *Node) beaconFinalityCheckpoints(w http.ResponseWriter, r *http.Request) {
 	block, err := n.beaconBlockID(r.PathValue("state_id"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeBeaconError(w, beaconBlockIDStatus(err), err)
 		return
 	}
-	head := n.chain.slotOf(block)
-	safe, finalized := uint64(0), uint64(0)
-	if head > n.cfg.Chain.SlotsPerEpoch {
-		safe = head - n.cfg.Chain.SlotsPerEpoch
-	}
-	if head > 2*n.cfg.Chain.SlotsPerEpoch {
-		finalized = head - 2*n.cfg.Chain.SlotsPerEpoch
-	}
-	safeBlock := n.chain.blockAtOrBeforeSlot(safe)
-	finalizedBlock := n.chain.blockAtOrBeforeSlot(finalized)
-	safeRoot, _ := n.beaconRoot(safeBlock)
-	finalizedRoot, _ := n.beaconRoot(finalizedBlock)
-	writeBeacon(w, http.StatusOK, map[string]any{
-		"previous_justified":  map[string]string{"epoch": strconv.FormatUint(safe/n.cfg.Chain.SlotsPerEpoch, 10), "root": common.Hash(safeRoot).Hex()},
-		"current_justified":   map[string]string{"epoch": strconv.FormatUint(safe/n.cfg.Chain.SlotsPerEpoch, 10), "root": common.Hash(safeRoot).Hex()},
-		"finalized":           map[string]string{"epoch": strconv.FormatUint(finalized/n.cfg.Chain.SlotsPerEpoch, 10), "root": common.Hash(finalizedRoot).Hex()},
-		"ethertest_synthetic": true,
-	})
+	finality := n.resolveSyntheticFinality(n.chain.slotOf(block))
+	safeRoot, _ := n.beaconRoot(finality.Safe)
+	finalizedRoot, _ := n.beaconRoot(finality.Finalized)
+	w.Header().Set("Eth-Consensus-Version", n.consensus.forkName(n.chain.slotOf(block)))
+	writeBeaconJSON(w, http.StatusOK, n.beaconResponse(block, map[string]any{
+		"previous_justified": map[string]string{"epoch": strconv.FormatUint(finality.SafeSlot/n.cfg.Chain.SlotsPerEpoch, 10), "root": common.Hash(safeRoot).Hex()},
+		"current_justified":  map[string]string{"epoch": strconv.FormatUint(finality.SafeSlot/n.cfg.Chain.SlotsPerEpoch, 10), "root": common.Hash(safeRoot).Hex()},
+		"finalized":          map[string]string{"epoch": strconv.FormatUint(finality.FinalizedSlot/n.cfg.Chain.SlotsPerEpoch, 10), "root": common.Hash(finalizedRoot).Hex()},
+	}))
 }
 
 func (n *Node) beaconValidators(w http.ResponseWriter, r *http.Request) {
-	if _, err := n.beaconBlockID(r.PathValue("state_id")); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+	block, err := n.beaconBlockID(r.PathValue("state_id"))
+	if err != nil {
+		writeBeaconError(w, beaconBlockIDStatus(err), err)
 		return
 	}
-	validators := make([]map[string]any, len(n.consensus.pubkeys))
+	selected, status, err := n.requestedValidators(r, true)
+	if err != nil {
+		writeBeaconError(w, status, err)
+		return
+	}
+	validators := make([]map[string]any, 0, len(n.consensus.pubkeys))
 	for index := range n.consensus.pubkeys {
-		validators[index] = map[string]any{
+		if selected != nil && !selected[index] {
+			continue
+		}
+		validators = append(validators, map[string]any{
 			"index": strconv.Itoa(index), "balance": "32000000000", "status": "active_ongoing",
 			"validator": map[string]any{
 				"pubkey":                 hexutil.Encode(n.consensus.pubkeys[index][:]),
@@ -185,32 +285,104 @@ func (n *Node) beaconValidators(w http.ResponseWriter, r *http.Request) {
 				"exit_epoch":         strconv.FormatUint(^uint64(0), 10),
 				"withdrawable_epoch": strconv.FormatUint(^uint64(0), 10),
 			},
-		}
+		})
 	}
-	writeBeacon(w, http.StatusOK, validators)
+	w.Header().Set("Eth-Consensus-Version", n.consensus.forkName(n.chain.slotOf(block)))
+	writeBeaconJSON(w, http.StatusOK, n.beaconResponse(block, validators))
 }
 
 func (n *Node) beaconValidatorBalances(w http.ResponseWriter, r *http.Request) {
-	if _, err := n.beaconBlockID(r.PathValue("state_id")); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+	block, err := n.beaconBlockID(r.PathValue("state_id"))
+	if err != nil {
+		writeBeaconError(w, beaconBlockIDStatus(err), err)
 		return
 	}
-	balances := make([]map[string]string, len(n.consensus.pubkeys))
-	for index := range n.consensus.pubkeys {
-		balances[index] = map[string]string{"index": strconv.Itoa(index), "balance": "32000000000"}
+	selected, status, err := n.requestedValidators(r, false)
+	if err != nil {
+		writeBeaconError(w, status, err)
+		return
 	}
-	writeBeacon(w, http.StatusOK, balances)
+	balances := make([]map[string]string, 0, len(n.consensus.pubkeys))
+	for index := range n.consensus.pubkeys {
+		if selected != nil && !selected[index] {
+			continue
+		}
+		balances = append(balances, map[string]string{"index": strconv.Itoa(index), "balance": "32000000000"})
+	}
+	w.Header().Set("Eth-Consensus-Version", n.consensus.forkName(n.chain.slotOf(block)))
+	writeBeaconJSON(w, http.StatusOK, n.beaconResponse(block, balances))
+}
+
+func (n *Node) requestedValidators(r *http.Request, allowStatus bool) (map[int]bool, int, error) {
+	ids := r.URL.Query()["id"]
+	if len(ids) > 64 {
+		return nil, http.StatusRequestURITooLong, errors.New("too many validator IDs in request")
+	}
+	selected := make(map[int]bool)
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, duplicate := seen[id]; duplicate {
+			return nil, http.StatusBadRequest, fmt.Errorf("duplicate validator ID %q", id)
+		}
+		seen[id] = struct{}{}
+		if index, err := strconv.ParseUint(id, 10, 64); err == nil {
+			if index < uint64(len(n.consensus.pubkeys)) {
+				selected[int(index)] = true
+			}
+			continue
+		}
+		decoded, err := hexutil.Decode(id)
+		if err != nil || len(decoded) != phase0.PublicKeyLength {
+			return nil, http.StatusBadRequest, fmt.Errorf("invalid validator ID %q", id)
+		}
+		for index := range n.consensus.pubkeys {
+			if bytes.Equal(decoded, n.consensus.pubkeys[index][:]) {
+				selected[index] = true
+				break
+			}
+		}
+	}
+	if len(ids) == 0 {
+		selected = nil
+	}
+	statuses := r.URL.Query()["status"]
+	if !allowStatus && len(statuses) != 0 {
+		return nil, http.StatusBadRequest, errors.New("status filter is not supported by validator_balances")
+	}
+	if len(statuses) != 0 {
+		matches := false
+		seenStatus := make(map[string]struct{}, len(statuses))
+		for _, value := range statuses {
+			if _, allowed := beaconGeneratedValidatorStatuses[value]; !allowed {
+				return nil, http.StatusBadRequest, fmt.Errorf("invalid validator status %q", value)
+			}
+			if _, duplicate := seenStatus[value]; duplicate {
+				return nil, http.StatusBadRequest, fmt.Errorf("duplicate validator status %q", value)
+			}
+			seenStatus[value] = struct{}{}
+			matches = matches || value == "active" || value == "active_ongoing"
+		}
+		if !matches {
+			return map[int]bool{}, http.StatusOK, nil
+		}
+	}
+	return selected, http.StatusOK, nil
 }
 
 func (n *Node) beaconBlobs(w http.ResponseWriter, r *http.Request) {
 	block, err := n.beaconBlockID(r.PathValue("block_id"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeBeaconError(w, beaconBlockIDStatus(err), err)
+		return
+	}
+	ssz, err := beaconWantsSSZ(r)
+	if err != nil {
+		writeBeaconError(w, http.StatusNotAcceptable, err)
 		return
 	}
 	selected, err := requestedVersionedHashes(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeBeaconError(w, http.StatusBadRequest, err)
 		return
 	}
 	items := make([]deneb.Blob, 0)
@@ -221,7 +393,7 @@ func (n *Node) beaconBlobs(w http.ResponseWriter, r *http.Request) {
 		}
 		hashes := sidecar.BlobHashes()
 		if len(sidecar.Blobs) != len(hashes) {
-			http.Error(w, "stored blob sidecar fields have inconsistent lengths", http.StatusInternalServerError)
+			writeBeaconError(w, http.StatusInternalServerError, errors.New("stored blob sidecar fields have inconsistent lengths"))
 			return
 		}
 		for index, blob := range sidecar.Blobs {
@@ -233,35 +405,38 @@ func (n *Node) beaconBlobs(w http.ResponseWriter, r *http.Request) {
 			items = append(items, deneb.Blob(blob))
 		}
 	}
-	if strings.Contains(r.Header.Get("Accept"), "application/octet-stream") {
+	if ssz {
+		setSyntheticConsensusHeaders(w)
 		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Eth-Consensus-Version", n.consensus.forkName(n.chain.slotOf(block)))
 		for index := range items {
 			_, _ = w.Write(items[index][:])
 		}
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(beaconBlobsEnvelope{
-		ExecutionOptimistic: false,
-		Finalized:           n.beaconBlockFinalized(block),
-		Data:                items,
-	})
+	w.Header().Set("Eth-Consensus-Version", n.consensus.forkName(n.chain.slotOf(block)))
+	writeBeaconJSON(w, http.StatusOK, n.beaconResponse(block, items))
 }
 
 func (n *Node) beaconBlobSidecars(w http.ResponseWriter, r *http.Request) {
 	block, err := n.beaconBlockID(r.PathValue("block_id"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeBeaconError(w, beaconBlockIDStatus(err), err)
+		return
+	}
+	ssz, err := beaconWantsSSZ(r)
+	if err != nil {
+		writeBeaconError(w, http.StatusNotAcceptable, err)
 		return
 	}
 	signedHeader, err := n.consensus.signedHeader(n.chain, block)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeBeaconError(w, http.StatusInternalServerError, err)
 		return
 	}
 	selected, err := requestedIndices(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeBeaconError(w, http.StatusBadRequest, err)
 		return
 	}
 	items := make([]*deneb.BlobSidecar, 0)
@@ -278,12 +453,12 @@ func (n *Node) beaconBlobSidecars(w http.ResponseWriter, r *http.Request) {
 			}
 			proof, err := kzg4844.ComputeBlobProof(&blob, sidecar.Commitments[index])
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeBeaconError(w, http.StatusInternalServerError, err)
 				return
 			}
 			inclusionProof, err := n.consensus.blobCommitmentInclusionProof(n.chain, block, globalIndex)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeBeaconError(w, http.StatusInternalServerError, err)
 				return
 			}
 			convertedProof := make(deneb.KZGCommitmentInclusionProof, len(inclusionProof))
@@ -299,28 +474,39 @@ func (n *Node) beaconBlobSidecars(w http.ResponseWriter, r *http.Request) {
 			globalIndex++
 		}
 	}
-	if strings.Contains(r.Header.Get("Accept"), "application/octet-stream") {
+	if ssz {
 		var output bytes.Buffer
 		for _, item := range items {
 			encoded, err := item.MarshalSSZ()
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeBeaconError(w, http.StatusInternalServerError, err)
 				return
 			}
 			output.Write(encoded)
 		}
+		setSyntheticConsensusHeaders(w)
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Eth-Consensus-Version", n.consensus.forkName(n.chain.slotOf(block)))
 		_, _ = w.Write(output.Bytes())
 		return
 	}
-	writeBeacon(w, http.StatusOK, items)
+	w.Header().Set("Eth-Consensus-Version", n.consensus.forkName(n.chain.slotOf(block)))
+	writeBeaconJSON(w, http.StatusOK, n.beaconResponse(block, items))
 }
 
 func (n *Node) beaconDataColumns(w http.ResponseWriter, r *http.Request) {
 	block, err := n.beaconBlockID(r.PathValue("block_id"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeBeaconError(w, beaconBlockIDStatus(err), err)
+		return
+	}
+	if n.consensus.forkName(n.chain.slotOf(block)) != "fulu" {
+		writeBeaconError(w, http.StatusNotFound, errors.New("data column sidecars are unavailable before Fulu"))
+		return
+	}
+	ssz, err := beaconWantsSSZ(r)
+	if err != nil {
+		writeBeaconError(w, http.StatusNotAcceptable, err)
 		return
 	}
 	type storedBlob struct {
@@ -337,7 +523,7 @@ func (n *Node) beaconDataColumns(w http.ResponseWriter, r *http.Request) {
 		for index := range sidecar.Blobs {
 			proofs, err := sidecar.CellProofsAt(index)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeBeaconError(w, http.StatusInternalServerError, err)
 				return
 			}
 			blobs = append(blobs, storedBlob{
@@ -346,13 +532,15 @@ func (n *Node) beaconDataColumns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(blobs) == 0 {
-		if strings.Contains(r.Header.Get("Accept"), "application/octet-stream") {
+		if ssz {
+			setSyntheticConsensusHeaders(w)
 			w.Header().Set("Content-Type", "application/octet-stream")
 			w.Header().Set("Eth-Consensus-Version", n.consensus.forkName(n.chain.slotOf(block)))
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		writeBeacon(w, http.StatusOK, []any{})
+		w.Header().Set("Eth-Consensus-Version", n.consensus.forkName(n.chain.slotOf(block)))
+		writeBeaconJSON(w, http.StatusOK, n.beaconVersionedResponse(block, []any{}))
 		return
 	}
 	fullBlobs := make([]kzg4844.Blob, len(blobs))
@@ -361,29 +549,29 @@ func (n *Node) beaconDataColumns(w http.ResponseWriter, r *http.Request) {
 	}
 	cells, err := kzg4844.ComputeCells(fullBlobs)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeBeaconError(w, http.StatusInternalServerError, err)
 		return
 	}
 	selected, err := requestedIndices(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeBeaconError(w, http.StatusBadRequest, err)
 		return
 	}
 	columns := make([]map[string]any, 0, kzg4844.CellProofsPerBlob)
 	encodedColumns := make([][]byte, 0, kzg4844.CellProofsPerBlob)
 	inclusionProof, err := n.consensus.kzgCommitmentsInclusionProof(n.chain, block)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeBeaconError(w, http.StatusInternalServerError, err)
 		return
 	}
 	signedHeader, err := n.consensus.signedHeader(n.chain, block)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeBeaconError(w, http.StatusInternalServerError, err)
 		return
 	}
 	headerSSZ, err := signedHeader.MarshalSSZ()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeBeaconError(w, http.StatusInternalServerError, err)
 		return
 	}
 	inclusionJSON := make([]string, len(inclusionProof))
@@ -421,12 +609,12 @@ func (n *Node) beaconDataColumns(w http.ResponseWriter, r *http.Request) {
 			uint64(column), columnValues, commitmentValues, proofValues, headerSSZ, inclusionProof,
 		)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeBeaconError(w, http.StatusInternalServerError, err)
 			return
 		}
 		encodedColumns = append(encodedColumns, encoded)
 	}
-	if strings.Contains(r.Header.Get("Accept"), "application/octet-stream") {
+	if ssz {
 		var output bytes.Buffer
 		offset := 4 * len(encodedColumns)
 		for _, encoded := range encodedColumns {
@@ -438,12 +626,14 @@ func (n *Node) beaconDataColumns(w http.ResponseWriter, r *http.Request) {
 		for _, encoded := range encodedColumns {
 			output.Write(encoded)
 		}
+		setSyntheticConsensusHeaders(w)
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Eth-Consensus-Version", n.consensus.forkName(n.chain.slotOf(block)))
 		_, _ = w.Write(output.Bytes())
 		return
 	}
-	writeBeacon(w, http.StatusOK, columns)
+	w.Header().Set("Eth-Consensus-Version", n.consensus.forkName(n.chain.slotOf(block)))
+	writeBeaconJSON(w, http.StatusOK, n.beaconVersionedResponse(block, columns))
 }
 
 func requestedIndices(r *http.Request) (map[uint64]bool, error) {
@@ -456,6 +646,9 @@ func requestedIndices(r *http.Request) (map[uint64]bool, error) {
 		parsed, err := strconv.ParseUint(value, 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("invalid index %q", value)
+		}
+		if indices[parsed] {
+			return nil, fmt.Errorf("duplicate index %q", value)
 		}
 		indices[parsed] = true
 	}
@@ -488,11 +681,7 @@ func (n *Node) beaconBlockFinalized(block *types.Block) bool {
 	if n.chain.blockchain.GetCanonicalHash(block.NumberU64()) != block.Hash() {
 		return false
 	}
-	finalizedSlot := uint64(0)
-	if currentSlot := n.chain.currentSlot(); currentSlot > 2*n.cfg.Chain.SlotsPerEpoch {
-		finalizedSlot = currentSlot - 2*n.cfg.Chain.SlotsPerEpoch
-	}
-	return n.chain.slotOf(block) <= finalizedSlot
+	return n.chain.slotOf(block) <= n.resolveSyntheticFinality(n.chain.currentSlot()).FinalizedSlot
 }
 
 func marshalDataColumnSSZ(
@@ -533,49 +722,53 @@ func marshalDataColumnSSZ(
 	return output, nil
 }
 
-// func (n *Node) beaconHeaderValue(block *types.Block) any {
-// 	header, err := n.consensus.signedHeader(n.chain, block)
-// 	if err != nil {
-// 		return nil
-// 	}
-// 	return header
-// }
-
 func (n *Node) beaconEvents(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+	topics, err := requestedBeaconTopics(r)
+	if err != nil {
+		writeBeaconError(w, http.StatusBadRequest, err)
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	revision := Revision(0)
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeBeaconError(w, http.StatusInternalServerError, errors.New("streaming unsupported"))
+		return
+	}
+	revision, lastWireID := Revision(0), uint64(0)
 	if value := r.Header.Get("Last-Event-ID"); value != "" {
 		parsed, err := strconv.ParseUint(value, 10, 64)
 		if err != nil {
-			http.Error(w, "invalid Last-Event-ID", http.StatusBadRequest)
+			writeBeaconError(w, http.StatusBadRequest, errors.New("invalid Last-Event-ID"))
 			return
 		}
-		revision = Revision(parsed)
-	}
-	if value := r.URL.Query().Get("last_event_id"); value != "" {
-		parsed, err := strconv.ParseUint(value, 10, 64)
-		if err != nil {
-			http.Error(w, "invalid last_event_id", http.StatusBadRequest)
-			return
+		lastWireID = parsed
+		wireRevision := Revision(parsed / 8)
+		if wireRevision > 0 {
+			revision = wireRevision - 1
 		}
-		revision = Revision(parsed)
+	} else {
+		revision = n.Revision()
+		lastWireID = uint64(revision)*8 + 7
 	}
 	events, changed, err := n.events.sinceAndWait(revision)
 	if err != nil {
-		http.Error(w, `{"code":"EVENT_GAP"}`, http.StatusGone)
+		writeBeaconError(w, http.StatusGone, ErrEventGap)
 		return
 	}
+	setSyntheticConsensusHeaders(w)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	writeEvents := func(events []Event) {
 		for _, event := range events {
-			data, _ := json.Marshal(event)
-			_, _ = fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", event.Revision, event.Type, data)
+			for _, message := range n.beaconEventMessages(event, topics) {
+				wireID := uint64(event.Revision)*8 + message.ordinal
+				if wireID <= lastWireID {
+					continue
+				}
+				data, _ := json.Marshal(message.data)
+				_, _ = fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", wireID, message.topic, data)
+				lastWireID = wireID
+			}
 			revision = event.Revision
 		}
 	}
@@ -590,7 +783,6 @@ func (n *Node) beaconEvents(w http.ResponseWriter, r *http.Request) {
 		case <-changed:
 			events, changed, err = n.events.sinceAndWait(revision)
 			if err != nil {
-				_, _ = fmt.Fprint(w, "event: gap\ndata: {\"code\":\"EVENT_GAP\"}\n\n")
 				flusher.Flush()
 				return
 			}
@@ -603,14 +795,123 @@ func (n *Node) beaconEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type beaconEventMessage struct {
+	topic   string
+	ordinal uint64
+	data    any
+}
+
+func requestedBeaconTopics(r *http.Request) (map[string]bool, error) {
+	values, present := r.URL.Query()["topics"]
+	if !present || len(values) == 0 {
+		return nil, errors.New("topics query parameter is required")
+	}
+	result := make(map[string]bool, len(values))
+	for _, value := range values {
+		for _, topic := range strings.Split(value, ",") {
+			if _, supported := beaconGeneratedEventTopics[topic]; !supported {
+				return nil, fmt.Errorf("invalid or unsupported event topic %q", topic)
+			}
+			if result[topic] {
+				return nil, fmt.Errorf("duplicate event topic %q", topic)
+			}
+			result[topic] = true
+		}
+	}
+	return result, nil
+}
+
+func (n *Node) beaconEventMessages(event Event, topics map[string]bool) []beaconEventMessage {
+	var messages []beaconEventMessage
+	switch event.Type {
+	case "block", "control_block":
+		if event.Removed {
+			return nil
+		}
+		block := n.chain.blockchain.GetBlockByHash(event.BlockHash)
+		if block == nil {
+			return nil
+		}
+		root, err := n.beaconRoot(block)
+		if err != nil {
+			return nil
+		}
+		optimistic := n.beaconLineageTainted(block)
+		if topics["block"] {
+			messages = append(messages, beaconEventMessage{topic: "block", ordinal: 0, data: map[string]any{
+				"slot": strconv.FormatUint(event.Slot, 10), "block": common.Hash(root).Hex(),
+				"execution_optimistic": optimistic,
+			}})
+		}
+		if topics["head"] {
+			header, err := n.consensus.signedHeader(n.chain, block)
+			if err != nil {
+				return messages
+			}
+			dependentRoot := common.Hash(root).Hex()
+			messages = append(messages, beaconEventMessage{topic: "head", ordinal: 1, data: map[string]any{
+				"slot": strconv.FormatUint(event.Slot, 10), "block": common.Hash(root).Hex(),
+				"state":                        common.Hash(header.Message.StateRoot).Hex(),
+				"epoch_transition":             event.Slot%n.cfg.Chain.SlotsPerEpoch == 0,
+				"previous_duty_dependent_root": dependentRoot,
+				"current_duty_dependent_root":  dependentRoot,
+				"execution_optimistic":         optimistic,
+			}})
+		}
+	case "chain_reorg":
+		if !topics["chain_reorg"] {
+			return nil
+		}
+		oldBlock := n.chain.blockchain.GetBlockByHash(event.OldHead)
+		newBlock := n.chain.blockchain.GetBlockByHash(event.NewHead)
+		if oldBlock == nil || newBlock == nil {
+			return nil
+		}
+		oldRoot, oldErr := n.beaconRoot(oldBlock)
+		newRoot, newErr := n.beaconRoot(newBlock)
+		oldHeader, oldHeaderErr := n.consensus.signedHeader(n.chain, oldBlock)
+		newHeader, newHeaderErr := n.consensus.signedHeader(n.chain, newBlock)
+		if oldErr != nil || newErr != nil || oldHeaderErr != nil || newHeaderErr != nil {
+			return nil
+		}
+		messages = append(messages, beaconEventMessage{topic: "chain_reorg", ordinal: 2, data: map[string]any{
+			"slot": strconv.FormatUint(event.Slot, 10), "depth": strconv.FormatUint(event.Depth, 10),
+			"old_head_block": common.Hash(oldRoot).Hex(), "new_head_block": common.Hash(newRoot).Hex(),
+			"old_head_state":       common.Hash(oldHeader.Message.StateRoot).Hex(),
+			"new_head_state":       common.Hash(newHeader.Message.StateRoot).Hex(),
+			"epoch":                strconv.FormatUint(event.Slot/n.cfg.Chain.SlotsPerEpoch, 10),
+			"execution_optimistic": n.beaconLineageTainted(newBlock),
+		}})
+	case "finalized_checkpoint":
+		if !topics["finalized_checkpoint"] {
+			return nil
+		}
+		block := n.chain.blockchain.GetBlockByHash(event.BlockHash)
+		if block == nil {
+			return nil
+		}
+		root, rootErr := n.beaconRoot(block)
+		header, headerErr := n.consensus.signedHeader(n.chain, block)
+		if rootErr != nil || headerErr != nil {
+			return nil
+		}
+		messages = append(messages, beaconEventMessage{topic: "finalized_checkpoint", ordinal: 3, data: map[string]any{
+			"block": common.Hash(root).Hex(), "state": common.Hash(header.Message.StateRoot).Hex(),
+			"epoch":                strconv.FormatUint(event.Slot/n.cfg.Chain.SlotsPerEpoch, 10),
+			"execution_optimistic": n.beaconLineageTainted(block),
+		}})
+	}
+	return messages
+}
+
 func (n *Node) beaconBlockID(id string) (*types.Block, error) {
 	switch id {
-	case "head", "safe", "finalized", "genesis":
+	case "head", "justified", "finalized", "genesis":
 		var tag rpc.BlockNumber
 		switch id {
 		case "head":
 			tag = rpc.LatestBlockNumber
-		case "safe":
+		case "justified":
 			tag = rpc.SafeBlockNumber
 		case "finalized":
 			tag = rpc.FinalizedBlockNumber
@@ -624,9 +925,17 @@ func (n *Node) beaconBlockID(id string) (*types.Block, error) {
 			if block := n.chain.blockchain.GetBlockByHash(requested); block != nil {
 				return block, nil
 			}
-			head := n.chain.blockchain.CurrentBlock().Number.Uint64()
-			for number := uint64(0); number <= head; number++ {
-				block := n.chain.blockchain.GetBlockByNumber(number)
+			n.chain.mu.RLock()
+			hashes := make([]common.Hash, 0, len(n.chain.slotByHash))
+			for hash := range n.chain.slotByHash {
+				hashes = append(hashes, hash)
+			}
+			n.chain.mu.RUnlock()
+			for _, hash := range hashes {
+				block := n.chain.blockchain.GetBlockByHash(hash)
+				if block == nil {
+					continue
+				}
 				root, err := n.beaconRoot(block)
 				if err == nil && common.Hash(root) == requested {
 					return block, nil
@@ -639,7 +948,7 @@ func (n *Node) beaconBlockID(id string) (*types.Block, error) {
 			return nil, errors.New("invalid block ID")
 		}
 		n.chain.mu.RLock()
-		hash, exists := n.chain.blockBySlot[slot]
+		hash, exists := n.chain.canonicalBlockBySlot[slot]
 		n.chain.mu.RUnlock()
 		if !exists {
 			return nil, errors.New("slot was missed")

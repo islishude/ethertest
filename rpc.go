@@ -19,6 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -50,6 +51,16 @@ type txSyncTimeoutError struct {
 	timeout time.Duration
 	hash    common.Hash
 }
+
+type resourceNotFoundError struct{ message string }
+
+func (err *resourceNotFoundError) Error() string  { return err.message }
+func (err *resourceNotFoundError) ErrorCode() int { return -32001 }
+
+type invalidInputError struct{ message string }
+
+func (err *invalidInputError) Error() string  { return err.message }
+func (err *invalidInputError) ErrorCode() int { return -32000 }
 
 func (err *txSyncTimeoutError) Error() string {
 	return fmt.Sprintf("The transaction was added to the transaction pool but wasn't processed in %v", err.timeout)
@@ -247,8 +258,8 @@ func (api *ethAPI) BlockNumber() hexutil.Uint64 {
 	return hexutil.Uint64(api.node.chain.blockchain.CurrentBlock().Number.Uint64())
 }
 func (api *ethAPI) Accounts() []common.Address { return api.node.Accounts() }
-func (api *ethAPI) Coinbase() common.Address   { return api.node.chain.feeRecipient }
-func (api *ethAPI) Mining() bool               { return api.node.cfg.Mining.Mode != "manual" }
+func (api *ethAPI) Coinbase() common.Address   { return api.node.chain.feeRecipientAddress() }
+func (api *ethAPI) Mining() bool               { return api.node.currentMiningMode() != "manual" }
 func (api *ethAPI) Hashrate() hexutil.Uint64   { return 0 }
 func (api *ethAPI) Syncing() bool              { return false }
 func (api *ethAPI) GasPrice() *hexutil.Big {
@@ -260,11 +271,7 @@ func (api *ethAPI) MaxPriorityFeePerGas() *hexutil.Big {
 }
 
 func (api *ethAPI) GetBalance(_ context.Context, address common.Address, selector rpc.BlockNumberOrHash) (*hexutil.Big, error) {
-	header, err := api.node.resolveHeader(selector)
-	if err != nil {
-		return nil, err
-	}
-	state, err := api.node.chain.blockchain.StateAt(header)
+	_, state, err := api.node.resolveState(selector)
 	if err != nil {
 		return nil, err
 	}
@@ -272,31 +279,15 @@ func (api *ethAPI) GetBalance(_ context.Context, address common.Address, selecto
 }
 
 func (api *ethAPI) GetTransactionCount(_ context.Context, address common.Address, selector rpc.BlockNumberOrHash) (hexutil.Uint64, error) {
-	header, err := api.node.resolveHeader(selector)
+	_, state, err := api.node.resolveState(selector)
 	if err != nil {
 		return 0, err
 	}
-	state, err := api.node.chain.blockchain.StateAt(header)
-	if err != nil {
-		return 0, err
-	}
-	nonce := state.GetNonce(address)
-	if selector.BlockNumber != nil && *selector.BlockNumber == rpc.PendingBlockNumber {
-		api.node.chain.mu.RLock()
-		defer api.node.chain.mu.RUnlock()
-		for api.node.chain.pending[address][nonce] != nil {
-			nonce++
-		}
-	}
-	return hexutil.Uint64(nonce), nil
+	return hexutil.Uint64(state.GetNonce(address)), nil
 }
 
 func (api *ethAPI) GetCode(_ context.Context, address common.Address, selector rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
-	header, err := api.node.resolveHeader(selector)
-	if err != nil {
-		return nil, err
-	}
-	state, err := api.node.chain.blockchain.StateAt(header)
+	_, state, err := api.node.resolveState(selector)
 	if err != nil {
 		return nil, err
 	}
@@ -304,11 +295,7 @@ func (api *ethAPI) GetCode(_ context.Context, address common.Address, selector r
 }
 
 func (api *ethAPI) GetStorageAt(_ context.Context, address common.Address, key common.Hash, selector rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
-	header, err := api.node.resolveHeader(selector)
-	if err != nil {
-		return nil, err
-	}
-	state, err := api.node.chain.blockchain.StateAt(header)
+	_, state, err := api.node.resolveState(selector)
 	if err != nil {
 		return nil, err
 	}
@@ -317,11 +304,7 @@ func (api *ethAPI) GetStorageAt(_ context.Context, address common.Address, key c
 }
 
 func (api *ethAPI) GetProof(_ context.Context, address common.Address, keys []common.Hash, selector rpc.BlockNumberOrHash) (*accountProof, error) {
-	header, err := api.node.resolveHeader(selector)
-	if err != nil {
-		return nil, err
-	}
-	state, err := api.node.chain.blockchain.StateAt(header)
+	header, state, err := api.node.resolveState(selector)
 	if err != nil {
 		return nil, err
 	}
@@ -527,7 +510,7 @@ func (api *ethAPI) EstimateGas(ctx context.Context, args callArgs, selector *rpc
 	if selector != nil {
 		blockSelector = *selector
 	}
-	header, err := api.node.resolveHeader(blockSelector)
+	header, state, err := api.node.resolveState(blockSelector)
 	if err != nil {
 		return 0, err
 	}
@@ -537,14 +520,14 @@ func (api *ethAPI) EstimateGas(ctx context.Context, args callArgs, selector *rpc
 	}
 	for low < high {
 		mid := low + (high-low)/2
-		result, callErr := api.executeCall(ctx, args, blockSelector, mid, overrides)
+		result, callErr := api.executeCallAt(ctx, args, header, state, mid, overrides, nil)
 		if callErr != nil || result.Failed() {
 			low = mid + 1
 		} else {
 			high = mid
 		}
 	}
-	result, err := api.executeCall(ctx, args, blockSelector, high, overrides)
+	result, err := api.executeCallAt(ctx, args, header, state, high, overrides, nil)
 	if err != nil || result.Failed() {
 		if err != nil {
 			return 0, err
@@ -559,14 +542,14 @@ func (api *ethAPI) executeCall(ctx context.Context, args callArgs, selector rpc.
 }
 
 func (api *ethAPI) executeCallWithTracer(ctx context.Context, args callArgs, selector rpc.BlockNumberOrHash, gasOverride uint64, overrides *stateOverride, hooks *tracing.Hooks) (*core.ExecutionResult, error) {
-	header, err := api.node.resolveHeader(selector)
+	header, state, err := api.node.resolveState(selector)
 	if err != nil {
 		return nil, err
 	}
-	state, err := api.node.chain.blockchain.StateAt(header)
-	if err != nil {
-		return nil, err
-	}
+	return api.executeCallAt(ctx, args, header, state, gasOverride, overrides, hooks)
+}
+
+func (api *ethAPI) executeCallAt(ctx context.Context, args callArgs, header *types.Header, state *state.StateDB, gasOverride uint64, overrides *stateOverride, hooks *tracing.Hooks) (*core.ExecutionResult, error) {
 	state = state.Copy()
 	if overrides != nil {
 		for address, account := range *overrides {
@@ -703,6 +686,9 @@ func (api *debugAPI) TraceTransaction(ctx context.Context, hash common.Hash, con
 	blockContext := core.NewEVMBlockContext(block.Header(), api.node.chain.blockchain, nil)
 	gasPool := core.NewGasPool(block.GasLimit())
 	signer := types.MakeSigner(api.node.chain.config, block.Number(), block.Time())
+	preEVM := vm.NewEVM(blockContext, state, api.node.chain.config, vm.Config{})
+	core.PreExecution(ctx, block.BeaconRoot(), parent, api.node.chain.config, preEVM, block.Number(), block.Time())
+	preEVM.Release()
 	var hooks *tracing.Hooks
 	var getResult func() (json.RawMessage, error)
 	var stopTracer func(error)
@@ -739,16 +725,19 @@ func (api *debugAPI) TraceTransaction(ctx context.Context, hash common.Hash, con
 		}
 		evm := vm.NewEVM(blockContext, state, api.node.chain.config, vmConfig)
 		evm.SetTxContext(core.NewEVMTxContext(message))
+		state.SetTxContext(tx.Hash(), index, uint32(index+1))
 		stop := context.AfterFunc(ctx, evm.Cancel)
-		_, applyErr := core.ApplyMessage(evm, message, gasPool)
+		_, _, applyErr := core.ApplyTransactionWithEVM(
+			message, gasPool, state, block.Number(), block.Hash(), block.Time(), tx, evm,
+		)
 		stop()
+		evm.Release()
 		if applyErr != nil {
 			if uint64(index) == transactionIndex {
 				stopTracer(applyErr)
 			}
 			return nil, applyErr
 		}
-		state.Finalise(true)
 		if uint64(index) == transactionIndex {
 			return getResult()
 		}
@@ -1001,16 +990,14 @@ func (api *txpoolAPI) Content() map[string]any {
 	defer api.node.chain.mu.RUnlock()
 	pending := make(map[string]map[string]any)
 	queued := make(map[string]map[string]any)
-	state, _ := api.node.chain.blockchain.State()
+	view := api.node.chain.pendingView
 	for address, transactions := range api.node.chain.pending {
-		frontier := state.GetNonce(address)
-		for transactions[frontier] != nil {
-			frontier++
-		}
 		for nonce, transaction := range transactions {
 			target := queued
-			if nonce < frontier {
-				target = pending
+			if view != nil {
+				if _, executable := view.executable[transaction.Hash()]; executable {
+					target = pending
+				}
 			}
 			if target[address.Hex()] == nil {
 				target[address.Hex()] = make(map[string]any)
@@ -1027,45 +1014,41 @@ func (api *txpoolAPI) Content() map[string]any {
 func (api *txpoolAPI) poolCounts() (pending, queued int) {
 	api.node.chain.mu.RLock()
 	defer api.node.chain.mu.RUnlock()
-	state, err := api.node.chain.blockchain.State()
-	if err != nil {
+	if api.node.chain.pendingView == nil {
 		for _, transactions := range api.node.chain.pending {
 			queued += len(transactions)
 		}
 		return 0, queued
 	}
-	for address, transactions := range api.node.chain.pending {
-		frontier := state.GetNonce(address)
-		for transactions[frontier] != nil {
-			frontier++
-		}
-		pendingForAccount := int(frontier - state.GetNonce(address))
-		pending += pendingForAccount
-		queued += len(transactions) - pendingForAccount
-	}
+	pending = len(api.node.chain.pendingView.executable)
+	queued = len(api.node.chain.pendingView.queued)
 	return pending, queued
 }
 
-func (api *minerAPI) Start(_ *int) bool {
-	_, _ = api.node.execute(context.Background(), func(_ *executionChain) (any, error) {
-		api.node.cfg.Mining.Mode = "transaction"
-		api.node.logger.Info("mining mode changed", "event", "mining_mode_changed", "mode", "transaction")
+func (api *minerAPI) Start(ctx context.Context, _ *int) (bool, error) {
+	_, err := api.node.execute(ctx, func(_ *executionChain) (any, error) {
+		mode := api.node.resumeMode()
+		api.node.setMiningMode(mode)
+		api.node.logger.Info("mining mode changed", "event", "mining_mode_changed", "mode", mode)
 		return nil, nil
 	})
-	return true
+	return err == nil, err
 }
-func (api *minerAPI) Stop() bool {
-	_, _ = api.node.execute(context.Background(), func(_ *executionChain) (any, error) {
-		api.node.cfg.Mining.Mode = "manual"
+func (api *minerAPI) Stop(ctx context.Context) (bool, error) {
+	_, err := api.node.execute(ctx, func(_ *executionChain) (any, error) {
+		api.node.setMiningMode("manual")
 		api.node.logger.Info("mining mode changed", "event", "mining_mode_changed", "mode", "manual")
 		return nil, nil
 	})
-	return true
+	return err == nil, err
 }
 
 func (api *minerAPI) SetEtherbase(ctx context.Context, address common.Address) (bool, error) {
 	_, err := api.node.execute(ctx, func(chain *executionChain) (any, error) {
-		chain.feeRecipient = address
+		chain.setFeeRecipient(address)
+		if err := api.node.rebuildPendingView(chain); err != nil {
+			return nil, err
+		}
 		api.node.logger.Info("fee recipient changed",
 			"event", "fee_recipient_changed",
 			"address", address.Hex(),
@@ -1100,11 +1083,24 @@ func (api *personalAPI) SendTransaction(ctx context.Context, args callArgs, _ st
 func (api *controlAPI) Capabilities() map[string]any {
 	return map[string]any{
 		"version": Version, "status": "alpha", "fork": "osaka/fulu", "syntheticFinality": true,
+		"consensusMode": "synthetic", "beaconApi": "v4-subset", "fullConsensus": false,
 		"forkTransitions": []string{"deneb", "electra", "fulu"},
 		"blobCodecs":      []string{"canonical-blob", "packed-bytes-v1"},
 		"p2p":             false, "engineAPI": false, "javascriptTracers": false,
 		"releaseComplete": false,
 	}
+}
+
+func (api *controlAPI) SafetyStatus() SafetyStatus {
+	return api.node.SafetyStatus()
+}
+
+func (api *controlAPI) BlockSafety(hash common.Hash) (BlockSafety, error) {
+	safety, err := api.node.BlockSafety(hash)
+	if err != nil {
+		return BlockSafety{}, &resourceNotFoundError{message: err.Error()}
+	}
+	return safety, nil
 }
 func (api *controlAPI) Mine(ctx context.Context, count *hexutil.Uint64) ([]common.Hash, error) {
 	n := uint64(1)
@@ -1160,6 +1156,8 @@ func (api *controlAPI) NetworkConfig() map[string]any {
 		"slotDuration":  api.node.cfg.Chain.SlotDuration.String(),
 		"slotsPerEpoch": api.node.cfg.Chain.SlotsPerEpoch,
 		"el":            executionAddress, "beacon": beaconAddress,
+		"consensusMode": "synthetic", "beaconApi": "v4-subset",
+		"fullConsensus": false, "releaseComplete": false,
 	}
 }
 
@@ -1191,7 +1189,10 @@ func (n *Node) resolveHeader(selector rpc.BlockNumberOrHash) (*types.Header, err
 	if selector.BlockHash != nil {
 		header := n.chain.blockchain.GetHeaderByHash(*selector.BlockHash)
 		if header == nil {
-			return nil, errors.New("header not found")
+			return nil, &resourceNotFoundError{message: "header not found"}
+		}
+		if selector.RequireCanonical && n.chain.blockchain.GetCanonicalHash(header.Number.Uint64()) != header.Hash() {
+			return nil, &invalidInputError{message: "header is not canonical"}
 		}
 		return header, nil
 	}
@@ -1206,30 +1207,38 @@ func (n *Node) resolveHeader(selector rpc.BlockNumberOrHash) (*types.Header, err
 	return block.Header(), nil
 }
 
+func (n *Node) resolveState(selector rpc.BlockNumberOrHash) (*types.Header, *state.StateDB, error) {
+	if selector.BlockHash == nil && selector.BlockNumber != nil && *selector.BlockNumber == rpc.PendingBlockNumber {
+		block, statedb, _ := n.chain.pendingSnapshot()
+		if block == nil || statedb == nil {
+			return nil, nil, &resourceNotFoundError{message: "pending state is unavailable"}
+		}
+		return block.Header(), statedb, nil
+	}
+	header, err := n.resolveHeader(selector)
+	if err != nil {
+		return nil, nil, err
+	}
+	statedb, err := n.chain.blockchain.StateAt(header)
+	if err != nil {
+		return nil, nil, err
+	}
+	return header, statedb, nil
+}
+
 func (n *Node) blockByNumber(number rpc.BlockNumber) (*types.Block, error) {
 	head := n.chain.blockchain.CurrentBlock().Number.Uint64()
 	switch number {
-	case rpc.LatestBlockNumber, rpc.PendingBlockNumber:
+	case rpc.LatestBlockNumber:
 		return n.chain.blockchain.GetBlockByNumber(head), nil
+	case rpc.PendingBlockNumber:
+		return n.chain.pendingBlock(), nil
 	case rpc.EarliestBlockNumber:
 		return n.chain.blockchain.GetBlockByNumber(0), nil
 	case rpc.SafeBlockNumber:
-		slot := n.chain.currentSlot()
-		if slot > n.cfg.Chain.SlotsPerEpoch {
-			slot -= n.cfg.Chain.SlotsPerEpoch
-		} else {
-			slot = 0
-		}
-		return n.chain.blockAtOrBeforeSlot(slot), nil
+		return n.resolveSyntheticFinality(n.chain.currentSlot()).Safe, nil
 	case rpc.FinalizedBlockNumber:
-		slot := n.chain.currentSlot()
-		lag := 2 * n.cfg.Chain.SlotsPerEpoch
-		if slot > lag {
-			slot -= lag
-		} else {
-			slot = 0
-		}
-		return n.chain.blockAtOrBeforeSlot(slot), nil
+		return n.resolveSyntheticFinality(n.chain.currentSlot()).Finalized, nil
 	default:
 		if number < 0 {
 			return nil, fmt.Errorf("unsupported block tag %s", number.String())

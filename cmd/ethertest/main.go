@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/ethereum/go-ethereum/common"
@@ -95,9 +94,6 @@ func effectiveConfig(ctx *cli.Context) (ethertest.Config, error) {
 	}
 	if ctx.IsSet("log-progress-interval") {
 		cfg.Log.ProgressInterval = ctx.Duration("log-progress-interval")
-	}
-	if cfg.Chain.GenesisTime == 0 {
-		cfg.Chain.GenesisTime = time.Now().UTC().Unix()
 	}
 	return cfg, cfg.Validate()
 }
@@ -186,7 +182,8 @@ func networkCommand() *cli.Command {
 			"chainId": cfg.Chain.ChainID, "networkId": cfg.Chain.NetworkID,
 			"genesisTime": cfg.Chain.GenesisTime, "fork": "osaka/fulu",
 			"execution": executionEndpoint, "consensus": beaconEndpoint,
-			"syntheticFinality": true,
+			"syntheticFinality": true, "consensusMode": "synthetic",
+			"beaconApi": "v4-subset", "fullConsensus": false, "releaseComplete": false,
 		}
 		return json.NewEncoder(os.Stdout).Encode(value)
 	}}
@@ -347,12 +344,6 @@ func stateCommand() *cli.Command {
 			}
 			return ethertest.LoadState(ctx.Args().First(), ctx.String("to"))
 		}},
-		{Name: "migrate", Action: func(ctx *cli.Context) error {
-			if ctx.NArg() != 1 {
-				return cli.Exit("usage: ethertest state migrate ARCHIVE", 2)
-			}
-			return ethertest.MigrateState(ctx.Args().First())
-		}},
 	}}
 }
 
@@ -383,6 +374,7 @@ func capabilitiesCommand() *cli.Command {
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{
 			"version": ethertest.Version, "status": "alpha", "fork": "osaka/fulu",
 			"syntheticFinality": true, "blobCodec": []string{"canonical-blob", "packed-bytes-v1"},
+			"consensusMode": "synthetic", "beaconApi": "v4-subset", "fullConsensus": false,
 			"forkTransitions": []string{"deneb", "electra", "fulu"},
 			"releaseComplete": false,
 		})

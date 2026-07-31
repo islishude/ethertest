@@ -1,10 +1,11 @@
 openapi: 3.0.3
 info:
-  title: ethertest Beacon API contract subset
+  title: ethertest Beacon API v4.0.0 contract subset
   version: 0.1.0
   description: >
-    Paths implemented from ethereum/beacon-APIs v4.0.0. Upstream schemas remain
-    authoritative; this narrow offline contract records the supported surface.
+    Offline, reviewed subset generated from ethereum/beacon-APIs v4.0.0.
+    Consensus values are ethertest synthetic projections, not BeaconState
+    transition results.
 paths:
   /eth/v1/beacon/genesis: {get: {responses: {'200': {description: Genesis}}}}
   /eth/v1/config/spec: {get: {responses: {'200': {description: Spec values}}}}
@@ -14,11 +15,51 @@ paths:
   /eth/v1/beacon/headers/{block_id}:
     get:
       parameters: [{$ref: '#/components/parameters/BlockID'}]
-      responses: {'200': {description: Signed beacon block header}}
-  /eth/v1/beacon/blocks/{block_id}:
+      responses:
+        '200': {description: Signed beacon block header, content: {application/json: {schema: {$ref: '#/components/schemas/Response'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /eth/v2/beacon/blocks/{block_id}:
     get:
       parameters: [{$ref: '#/components/parameters/BlockID'}]
-      responses: {'200': {description: Signed beacon block in JSON or SSZ}}
+      responses:
+        '200':
+          description: Signed beacon block in JSON or SSZ
+          headers: {Eth-Consensus-Version: {$ref: '#/components/headers/EthConsensusVersion'}}
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/VersionedResponse'}}
+            application/octet-stream: {schema: {type: string, format: binary}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '406': {$ref: '#/components/responses/NotAcceptable'}
+  /eth/v1/beacon/states/{state_id}/validators:
+    get:
+      parameters:
+        - {$ref: '#/components/parameters/StateID'}
+        - {$ref: '#/components/parameters/ValidatorIDs'}
+        - {$ref: '#/components/parameters/ValidatorStatuses'}
+      responses:
+        '200': {description: Filtered validators, content: {application/json: {schema: {$ref: '#/components/schemas/Response'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '414': {$ref: '#/components/responses/InvalidRequest'}
+  /eth/v1/beacon/states/{state_id}/validator_balances:
+    get:
+      parameters:
+        - {$ref: '#/components/parameters/StateID'}
+        - {$ref: '#/components/parameters/ValidatorIDs'}
+      responses:
+        '200': {description: Filtered balances, content: {application/json: {schema: {$ref: '#/components/schemas/Response'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '414': {$ref: '#/components/responses/InvalidRequest'}
+  /eth/v1/beacon/states/{state_id}/finality_checkpoints:
+    get:
+      parameters: [{$ref: '#/components/parameters/StateID'}]
+      responses:
+        '200': {description: Synthetic finality checkpoints, content: {application/json: {schema: {$ref: '#/components/schemas/Response'}}}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
   /eth/v1/beacon/blobs/{block_id}:
     get:
       parameters:
@@ -28,28 +69,73 @@ paths:
         '200':
           description: Blobs in block commitment order
           content:
-            application/json:
-              schema: {$ref: '#/components/schemas/BlobsResponse'}
-            application/octet-stream:
-              schema: {type: string, format: binary}
+            application/json: {schema: {$ref: '#/components/schemas/Response'}}
+            application/octet-stream: {schema: {type: string, format: binary}}
   /eth/v1/beacon/blob_sidecars/{block_id}:
     get:
       parameters:
         - {$ref: '#/components/parameters/BlockID'}
         - {$ref: '#/components/parameters/Indices'}
       responses: {'200': {description: Blob sidecars}}
-  /eth/v1/beacon/data_column_sidecars/{block_id}:
+  /eth/v1/debug/beacon/data_column_sidecars/{block_id}:
     get:
-      parameters: [{$ref: '#/components/parameters/BlockID'}]
-      responses: {'200': {description: Fulu data column sidecars in JSON or SSZ}}
-  /eth/v1/events: {get: {responses: {'200': {description: Server-sent events}}}}
+      parameters:
+        - {$ref: '#/components/parameters/BlockID'}
+        - {$ref: '#/components/parameters/Indices'}
+      responses:
+        '200':
+          description: Fulu data column sidecars in JSON or SSZ
+          headers: {Eth-Consensus-Version: {$ref: '#/components/headers/EthConsensusVersion'}}
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/VersionedResponse'}}
+            application/octet-stream: {schema: {type: string, format: binary}}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '406': {$ref: '#/components/responses/NotAcceptable'}
+  /eth/v1/events:
+    get:
+      parameters:
+        - in: query
+          name: topics
+          required: true
+          schema:
+            type: array
+            uniqueItems: true
+            items: {type: string, enum: [head, block, chain_reorg, finalized_checkpoint]}
+      responses:
+        '200': {description: Server-sent events}
+        '400': {$ref: '#/components/responses/InvalidRequest'}
 components:
+  headers:
+    EthConsensusVersion:
+      required: true
+      schema: {type: string, enum: [deneb, electra, fulu]}
   parameters:
     BlockID:
       in: path
       name: block_id
       required: true
       schema: {type: string}
+    StateID:
+      in: path
+      name: state_id
+      required: true
+      schema: {type: string}
+    ValidatorIDs:
+      in: query
+      name: id
+      required: false
+      schema: {type: array, maxItems: 64, uniqueItems: true, items: {type: string}}
+    ValidatorStatuses:
+      in: query
+      name: status
+      required: false
+      schema:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+          enum: [pending_initialized, pending_queued, active_ongoing, active_exiting, active_slashed, exited_unslashed, exited_slashed, withdrawal_possible, withdrawal_done, pending, active, exited, withdrawal]
     VersionedHashes:
       in: query
       name: versioned_hashes
@@ -57,9 +143,7 @@ components:
       schema:
         type: array
         uniqueItems: true
-        items:
-          type: string
-          pattern: '^0x[a-fA-F0-9]{64}$'
+        items: {type: string, pattern: '^0x[a-fA-F0-9]{64}$'}
     Indices:
       in: query
       name: indices
@@ -68,15 +152,43 @@ components:
         type: array
         uniqueItems: true
         items: {type: string, pattern: '^[0-9]+$'}
+  responses:
+    InvalidRequest:
+      description: Invalid request
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorMessage'}}}
+    NotFound:
+      description: Requested item not found
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorMessage'}}}
+    NotAcceptable:
+      description: Accepted media type not supported
+      content: {application/json: {schema: {$ref: '#/components/schemas/ErrorMessage'}}}
   schemas:
-    BlobsResponse:
+    DataEnvelope:
+      type: object
+      required: [data]
+      properties:
+        data: {}
+    ErrorMessage:
+      type: object
+      required: [code, message]
+      properties:
+        code: {type: integer}
+        message: {type: string}
+        stacktraces: {type: array, items: {type: string}}
+    Response:
       type: object
       required: [execution_optimistic, finalized, data]
       properties:
         execution_optimistic: {type: boolean}
         finalized: {type: boolean}
-        data:
-          type: array
-          items:
-            type: string
-            pattern: '^0x[a-fA-F0-9]{262144}$'
+        data: {}
+        ethertest_tainted: {type: boolean}
+    VersionedResponse:
+      type: object
+      required: [version, execution_optimistic, finalized, data]
+      properties:
+        version: {type: string, enum: [deneb, electra, fulu]}
+        execution_optimistic: {type: boolean}
+        finalized: {type: boolean}
+        data: {}
+        ethertest_tainted: {type: boolean}

@@ -356,8 +356,8 @@ func TestSnapshotIsOneShotAndReorgEventsAreOrdered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 2 || !events[0].Removed || !events[1].Removed ||
-		events[0].BlockNumber != 3 || events[1].BlockNumber != 2 {
+	if len(events) != 3 || !events[0].Removed || !events[1].Removed ||
+		events[0].BlockNumber != 3 || events[1].BlockNumber != 2 || events[2].Type != "chain_reorg" {
 		t.Fatalf("unexpected reorg events %#v", events)
 	}
 }
@@ -562,7 +562,7 @@ func TestBeaconSSEStreamsFutureEvents(t *testing.T) {
 	request, _ := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
-		node.Endpoints().Beacon+"/eth/v1/events",
+		node.Endpoints().Beacon+"/eth/v1/events?topics=block",
 		nil,
 	)
 	response, err := http.DefaultClient.Do(request)
@@ -595,7 +595,7 @@ func TestBeaconSSEStreamsFutureEvents(t *testing.T) {
 	}()
 	select {
 	case event := <-record:
-		if !strings.Contains(event, "event: block") || !strings.Contains(event, `"block_number":1`) {
+		if !strings.Contains(event, "event: block") || !strings.Contains(event, `"slot":"1"`) || !strings.Contains(event, `"execution_optimistic":false`) {
 			t.Fatalf("unexpected SSE event %q", event)
 		}
 	case <-time.After(time.Second):

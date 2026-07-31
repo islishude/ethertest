@@ -1,11 +1,14 @@
 package ethertest
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
+	"slices"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
@@ -43,17 +46,24 @@ func (n *Node) ApplyControl(ctx context.Context, changes ControlChanges) (common
 }
 
 func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (common.Hash, error) {
-	chain.mu.Lock()
-	defer chain.mu.Unlock()
 	parentHeader := chain.blockchain.CurrentBlock()
 	parent := chain.blockchain.GetBlock(parentHeader.Hash(), parentHeader.Number.Uint64())
+	projection, err := n.consensus.ensureProjection(chain, parent)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	chain.mu.RLock()
 	targetSlot := chain.slot + 1
+	parentSafety := chain.blockSafety[parent.Hash()]
+	timeline := chain.timeline()
+	sessionSafety := chain.sessionSafety()
+	chain.mu.RUnlock()
 	targetTime := chain.genesisTime + targetSlot*chain.slotDuration
 	blocks, _ := core.GenerateChain(chain.config, parent, chain.blockchain.Engine(), chain.db, 1, func(_ int, generator *core.BlockGen) {
 		generator.OffsetTime(int64(targetTime) - int64(generator.Timestamp()))
 		generator.SetPoS()
-		generator.SetCoinbase(chain.feeRecipient)
-		generator.SetParentBeaconRoot(parent.Hash())
+		generator.SetCoinbase(chain.feeRecipientAddress())
+		generator.SetParentBeaconRoot(common.Hash(projection.Root))
 	})
 	generated := blocks[0]
 	state, err := chain.blockchain.StateAt(generated.Header())
@@ -67,6 +77,9 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 	if err != nil {
 		return common.Hash{}, err
 	}
+	if err := state.Database().TrieDB().Commit(root, false); err != nil {
+		return common.Hash{}, err
+	}
 	metadata, err := json.Marshal(changes)
 	if err != nil {
 		return common.Hash{}, err
@@ -76,23 +89,70 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 	header.Root = root
 	header.Extra = append([]byte("ethertest-control-v1:"), digest[:10]...)
 	block := generated.WithSeal(header)
-	rawdb.WriteBlock(chain.db, block)
-	rawdb.WriteReceipts(chain.db, block.Hash(), block.NumberU64(), types.Receipts{})
-	if _, err := chain.blockchain.SetCanonical(block); err != nil {
-		return common.Hash{}, err
-	}
 	record, err := rlp.EncodeToBytes([][]byte{metadata, parent.Hash().Bytes()})
 	if err != nil {
 		return common.Hash{}, err
 	}
-	if err := chain.db.Put(append(append([]byte(nil), controlNamespace...), block.Hash().Bytes()...), record); err != nil {
+	projectionPut, err := n.consensus.projectionPut(chain, block)
+	if err != nil {
 		return common.Hash{}, err
 	}
-	chain.slot = targetSlot
-	chain.slotByHash[block.Hash()] = targetSlot
-	chain.blockBySlot[targetSlot] = block.Hash()
-	if _, err := n.events.append(Event{Type: "control_block", BlockHash: block.Hash(), BlockNumber: block.NumberU64()}); err != nil {
+	safety := blockSafetyForChild(parentSafety, block.Hash(), taintControlStateOverride)
+	timeline.CurrentSlot, timeline.LastProcessedSlot = targetSlot, targetSlot
+	sessionSafety.Tainted = true
+	if sessionSafety.FirstUnsafeBlock == nil {
+		sessionSafety.FirstUnsafeBlock = cloneHashPointer(safety.FirstUnsafeBlock)
+	}
+	if !slices.Contains(sessionSafety.Reasons, taintControlStateOverride) {
+		sessionSafety.Reasons = append(sessionSafety.Reasons, taintControlStateOverride)
+		slices.Sort(sessionSafety.Reasons)
+	}
+	timelineMutation, err := timelinePut(timeline)
+	if err != nil {
 		return common.Hash{}, err
+	}
+	safetyMutation, err := blockSafetyPut(block.Hash(), safety)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	sessionMutation, err := sessionSafetyPut(sessionSafety)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	operation := preparedOperation{
+		Kind: "head", OldHead: parent.Hash(), NewHead: block.Hash(),
+		TargetNumber: block.NumberU64(), DiscardTargetOnCancel: true,
+		Puts: []journalKV{
+			{Key: append(append([]byte(nil), controlNamespace...), block.Hash().Bytes()...), Value: record},
+			timelineMutation, blockSlotPut(block.Hash(), targetSlot),
+			canonicalSlotPut(targetSlot, block.Hash()), safetyMutation, sessionMutation, projectionPut,
+		},
+	}
+	events := []Event{{Type: "control_block", Slot: targetSlot, BlockHash: block.Hash(), BlockNumber: block.NumberU64()}}
+	if finalized := n.finalizedEventBetween(targetSlot-1, targetSlot); finalized != nil {
+		events = append(events, *finalized)
+	}
+	if err := n.commitPrepared(chain, operation, events, func() error {
+		rawdb.WriteBlock(chain.db, block)
+		rawdb.WriteReceipts(chain.db, block.Hash(), block.NumberU64(), types.Receipts{})
+		_, setErr := chain.blockchain.SetCanonical(block)
+		return setErr
+	}, func() {
+		chain.mu.Lock()
+		chain.slot, chain.lastProcessedSlot = targetSlot, targetSlot
+		chain.slotByHash[block.Hash()] = targetSlot
+		chain.canonicalBlockBySlot[targetSlot] = block.Hash()
+		chain.blockSafety[block.Hash()] = safety
+		chain.sessionTainted = true
+		chain.firstUnsafeBlock = cloneHashPointer(sessionSafety.FirstUnsafeBlock)
+		chain.taintReasons[taintControlStateOverride] = struct{}{}
+		chain.mu.Unlock()
+	}); err != nil {
+		return common.Hash{}, err
+	}
+	if err := n.rebuildPendingView(chain); err != nil {
+		n.writeErr = err
+		return common.Hash{}, fmt.Errorf("control block committed but pending view rebuild failed: %w", err)
 	}
 	n.logger.Info("control block applied",
 		"event", "control_block_applied",
@@ -136,38 +196,59 @@ func (n *Node) ControlChanges(hash common.Hash) (ControlChanges, bool) {
 	if err != nil {
 		return nil, false
 	}
+	changes, _, _, ok := decodeControlRecord(data)
+	return changes, ok
+}
+
+func decodeControlRecord(data []byte) (ControlChanges, common.Hash, []byte, bool) {
 	var record [][]byte
-	if rlp.DecodeBytes(data, &record) != nil || len(record) == 0 {
-		return nil, false
+	if rlp.DecodeBytes(data, &record) != nil || len(record) != 2 || len(record[1]) != common.HashLength {
+		return nil, common.Hash{}, nil, false
 	}
 	var changes ControlChanges
 	if json.Unmarshal(record[0], &changes) != nil {
-		return nil, false
+		return nil, common.Hash{}, nil, false
 	}
-	return changes, true
+	return changes, common.BytesToHash(record[1]), append([]byte(nil), record[0]...), true
 }
 
-func (n *Node) VerifyControlBlock(ctx context.Context, hash common.Hash) (bool, error) {
+// VerifyControlRecord verifies ethertest's unsafe fixture record. It does not
+// assert that the block is valid under the Ethereum state transition.
+func (n *Node) VerifyControlRecord(ctx context.Context, hash common.Hash) (bool, error) {
 	value, err := n.execute(ctx, func(chain *executionChain) (any, error) {
-		chain.mu.Lock()
-		defer chain.mu.Unlock()
 		block := chain.blockchain.GetBlockByHash(hash)
 		if block == nil {
 			return false, errors.New("control block not found")
 		}
-		changes, ok := n.ControlChanges(hash)
-		if !ok {
+		encoded, err := chain.db.Get(append(append([]byte(nil), controlNamespace...), hash.Bytes()...))
+		if err != nil {
 			return false, errors.New("control metadata not found")
+		}
+		changes, recordedParent, metadata, ok := decodeControlRecord(encoded)
+		if !ok {
+			return false, errors.New("control metadata is invalid")
+		}
+		if recordedParent != block.ParentHash() {
+			return false, errors.New("control metadata parent does not match block")
+		}
+		digest := sha256.Sum256(metadata)
+		wantExtra := append([]byte("ethertest-control-v1:"), digest[:10]...)
+		if !bytes.Equal(block.Extra(), wantExtra) {
+			return false, errors.New("control metadata digest does not match block")
 		}
 		parent := chain.blockchain.GetBlockByHash(block.ParentHash())
 		if parent == nil {
 			return false, errors.New("control parent not found")
 		}
+		projection, err := n.consensus.ensureProjection(chain, parent)
+		if err != nil {
+			return false, err
+		}
 		generated, _ := core.GenerateChain(chain.config, parent, chain.blockchain.Engine(), chain.db, 1, func(_ int, generator *core.BlockGen) {
 			generator.OffsetTime(int64(block.Time()) - int64(generator.Timestamp()))
 			generator.SetPoS()
 			generator.SetCoinbase(block.Coinbase())
-			generator.SetParentBeaconRoot(parent.Hash())
+			generator.SetParentBeaconRoot(common.Hash(projection.Root))
 		})
 		state, err := chain.blockchain.StateAt(generated[0].Header())
 		if err != nil {
@@ -182,4 +263,10 @@ func (n *Node) VerifyControlBlock(ctx context.Context, hash common.Hash) (bool, 
 		return false, err
 	}
 	return value.(bool), nil
+}
+
+// VerifyControlBlock is retained as a deprecated compatibility wrapper.
+// Deprecated: use VerifyControlRecord.
+func (n *Node) VerifyControlBlock(ctx context.Context, hash common.Hash) (bool, error) {
+	return n.VerifyControlRecord(ctx, hash)
 }

@@ -1,0 +1,20 @@
+{
+  "source": "https://github.com/ethereum/consensus-spec-tests",
+  "ref": "v1.6.0-beta.0",
+  "commit": "bc5c1a7fb2a8871aaffd4b16ee4dd9c72bb81908",
+  "path": "tests/mainnet/phase0/ssz_static/BeaconBlockHeader/ssz_random/case_0",
+  "upstream_blobs": {
+    "roots.yaml": "152896f04019c60a2d5ab258964dc449f644c247",
+    "serialized.ssz_snappy": "e300781df623e204b805ba5bece25788eecb1756",
+    "value.yaml": "cc6d8da99a30024e006ab7142bcce6c12e6954a7"
+  },
+  "serialized_ssz_snappy": "0x70f06f2eeb8a2314de74dfc9344be9d98b7ad4caf0db22470a8e987fef3d78ce7a14bbd7714570b78d5d5bc4421ea2b657f98677134de1d4dc7a8ffb098e305ae5ccfb7cb27cba5866712f95756ddbc044d328934af84956d1a252aa767406a8bae9e26b083a81be4b1703f157a70abcfb6085",
+  "root": "0xa2672769763d19c79dd7a584f37fd3391c0510c1fd6eba54ec0cd78748a84800",
+  "value": {
+    "slot": "16101738745833384750",
+    "proposer_index": "15310703651237606601",
+    "parent_root": "0xcaf0db22470a8e987fef3d78ce7a14bbd7714570b78d5d5bc4421ea2b657f986",
+    "state_root": "0x77134de1d4dc7a8ffb098e305ae5ccfb7cb27cba5866712f95756ddbc044d328",
+    "body_root": "0x934af84956d1a252aa767406a8bae9e26b083a81be4b1703f157a70abcfb6085"
+  }
+}

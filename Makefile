@@ -17,8 +17,7 @@ lint:
 	$(GO) vet ./...
 
 generate-check:
-	$(GO) generate ./...
-	git diff --exit-code
+	$(GO) run ./internal/beaconcontractgen -check
 
 clean:
 	$(GO) clean -testcache

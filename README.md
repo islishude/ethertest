@@ -6,7 +6,12 @@ explorers, indexers, and other off-chain applications that need realistic
 cross-layer behavior without P2P or a validator client.
 
 The current version is `0.1.0-alpha.1`. State format compatibility is not
-promised until `v0.1.0`.
+promised until `v0.1.0`. This alpha uses an in-place, breaking state layout:
+databases created by the earlier layout are rejected and must be recreated;
+there is no migration command.
+An unspecified `genesis_time` (`0`) is resolved once for a new chain and then
+read from the persisted timeline on later Pebble starts. An explicitly supplied
+value that differs from the stored value is rejected.
 
 ## Quick start
 
@@ -24,6 +29,7 @@ Defaults:
 - 6-second slots, 8 slots/epoch, 64 deterministic validators
 - Osaka/Fulu active at genesis
 - synthetic safe/finalized checkpoints lagging one/two epochs
+- `consensusMode: synthetic`, Beacon API `v4-subset`, `fullConsensus: false`
 
 In human mode, a separate stderr banner prints development private keys. Keys
 are never included in structured logs, errors, metrics, or state archives.
@@ -42,6 +48,9 @@ docker compose down
 Execution RPC is available at `http://127.0.0.1:8545` and Beacon REST/SSE uses
 the same listener, for example
 `http://127.0.0.1:8545/eth/v1/beacon/headers/head`.
+Fork-dependent blocks use
+`/eth/v2/beacon/blocks/{block_id}` and Fulu data columns use
+`/eth/v1/debug/beacon/data_column_sidecars/{block_id}`.
 `docker compose down` sends SIGTERM and allows the node to write
 `/state/ethertest-state.tar.zst` before exit. Use
 `docker compose down -v` only when intentionally deleting both named volumes.
@@ -51,22 +60,37 @@ the same listener, for example
 The library exposes `Config`, `Node`, in-process RPC clients, endpoint discovery,
 transaction submission, manual mining, missed slots, snapshots, persistent
 repeatable checkpoints, persistent explicit branches, canonical switching,
-bounded persistent event replay, and atomic state archives.
+bounded persistent event replay, safety queries, and atomic state archives.
+Clean histories can be replayed by geth's execution state processor. State
+control methods deliberately create unsafe fixtures; the control block, every
+descendant, its branches, and the containing session/archive remain tainted.
 
 The network surface currently includes:
 
 - Core `eth`, `net`, `web3`, `txpool`, `miner`, `personal`, and `debug` methods.
 - EIP-1186 proofs, state overrides, polling filters, `newHeads`, HTTP/WS batch,
   struct logging, and native Go tracers. JavaScript tracers are rejected.
+- One immutable pending candidate view shared by pending block/state/call/proof
+  queries, with deterministic executable/queued classification.
 - Type-3 raw submission with mandatory KZG validation, Deneb JSON/SSZ sidecars,
   Osaka cell proofs, `packed-bytes-v1`, stable blob retrieval, and Fulu data
   columns.
-- Beacon genesis/config/health, signed headers and blocks, validators/balances,
+- Beacon API v4.0.0 subset for genesis/config/health, signed headers and blocks,
+  validators/balances,
   Deneb→Electra/Fulu container transitions, synthetic finality, JSON/SSZ
-  negotiation, and live bounded SSE replay.
-- Memory and Pebble databases; checksum-verified, zstd-compressed state archives.
+  negotiation, required-topic standard SSE replay, and structured errors.
+- Memory and Pebble databases; recovery-journaled execution/auxiliary commits;
+  checksum-verified, zstd-compressed state archives.
+- `Node.SafetyStatus`, `Node.BlockSafety`, `ethertest_safetyStatus`, and
+  `ethertest_blockSafety` for permanent fixture taint discovery.
+- Offline locked EIP-4788 wraparound, KZG proof, and SSZ container regression
+  vectors; their source revisions and digests are recorded in `spec.lock`.
 
-Not yet release-complete: unsafe header sessions and taint propagation,
+This is a synthetic Beacon projection, not a consensus client: it does not
+implement BeaconState transitions, Casper FFG, fork choice, P2P, the Engine API,
+or standard CL block import.
+
+Not yet release-complete: unsafe header mutation sessions,
 execution request and withdrawal queue controls (containers are present but
 queues are empty), finality pause/resume controls, complete RPC compatibility,
 generated full upstream API contracts, all official vector suites, encrypted
@@ -81,7 +105,7 @@ ethertest [flags]
 ethertest config print|validate
 ethertest network --json
 ethertest blob encode|decode|send
-ethertest state inspect|dump|load|migrate
+ethertest state inspect|dump|load
 ethertest accounts export --unsafe-plain
 ethertest capabilities
 ethertest completion bash|zsh|fish

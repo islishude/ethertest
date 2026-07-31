@@ -7,12 +7,14 @@ require (
 	github.com/OffchainLabs/go-bitfield v0.0.0-20260504143531-5cbb6d0f5f2e
 	github.com/attestantio/go-eth2-client v0.29.0
 	github.com/ethereum/go-ethereum v1.17.5
+	github.com/golang/snappy v1.0.1-0.20260716114414-9ae09f520e93
 	github.com/holiman/uint256 v1.3.2
 	github.com/klauspost/compress v1.19.1
 	github.com/protolambda/bls12-381-util v0.1.0
 	github.com/tyler-smith/go-bip32 v1.0.0
 	github.com/tyler-smith/go-bip39 v1.1.0
 	github.com/urfave/cli/v2 v2.27.7
+	gopkg.in/yaml.v2 v2.4.0
 )
 
 require (
@@ -58,7 +60,6 @@ require (
 	github.com/gofrs/flock v0.12.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/golang/snappy v1.0.1-0.20260716114414-9ae09f520e93 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/holiman/bloomfilter/v2 v2.0.3 // indirect
 	github.com/huin/goupnp v1.3.0 // indirect
@@ -104,5 +105,4 @@ require (
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
-	gopkg.in/yaml.v2 v2.4.0 // indirect
 )

@@ -2,8 +2,8 @@ format = 1
 generated_at = "2026-07-31T00:00:00Z"
 
 # Go dependencies are additionally locked by go.mod and go.sum. Normal builds
-# never fetch the specification repositories. Automated digest verification is
-# still a v0.1 release gate.
+# never fetch the specification repositories. spec_lock_test.go verifies every
+# vendored/generated digest offline; full-suite provenance remains a release gate.
 
 [[source]]
 name = "go-ethereum"
@@ -29,9 +29,42 @@ url = "https://github.com/ethereum/beacon-APIs"
 ref = "v4.0.0"
 commit = "88fc9402c6a1821b6e9ae4e3b8ae0a22f1141203"
 kind = "vendored-spec"
+subset = "specs/upstream/beacon-api-subset.yaml"
+subset_sha256 = "6481a32bece497297ad5db9f379a352cfa0097be656b1fdd09e971000b73ec87"
+generated = "beacon_contract_generated.go"
+generated_sha256 = "07b93a075de8cd5a341f30df8c37ca56125864c5052c1af6fbd6fef868cda32f"
 
 [[source]]
 name = "consensus-specs"
 url = "https://github.com/ethereum/consensus-specs"
 ref = "v1.6.1"
-kind = "vendored-tests"
+kind = "vendored-preset"
+subset = "specs/upstream/ethertest-minimal.yaml"
+subset_sha256 = "654186d7415a0add03f59c54911f64ee7e8e1ad40cb0f79e9d817ba5a62917dc"
+
+[[source]]
+name = "c-kzg-4844"
+url = "https://github.com/ethereum/c-kzg-4844"
+ref = "v2.1.5"
+commit = "7043f4d4dd7cedf510294d1336a24522c423d09d"
+kind = "vendored-test-vector"
+subset = "testdata/vectors/c-kzg-4844-v2.1.5/verify_kzg_proof/correct_proof_0_0.yaml"
+upstream_blob_sha1 = "346963993704c42386580f91e515f9ff72024cdd"
+subset_sha256 = "205a35f8bd0fe266db8d3b3fa0744e8025a07ffc0f69946afec4f2be38cd6051"
+
+[[source]]
+name = "consensus-spec-tests"
+url = "https://github.com/ethereum/consensus-spec-tests"
+ref = "v1.6.0-beta.0"
+commit = "bc5c1a7fb2a8871aaffd4b16ee4dd9c72bb81908"
+kind = "vendored-test-vector"
+subset = "testdata/vectors/consensus-spec-tests-v1.6.0-beta.0/beacon_block_header/case_0.json"
+subset_sha256 = "745ebf7bece02fbec3301d63a53857f2d98610fe8fa8ffde77258fce7e3d53a9"
+
+[[source]]
+name = "execution-spec-tests"
+url = "https://github.com/ethereum/execution-spec-tests"
+ref = "10eaa63d5da2f50b63d4359968f36542212f9f50"
+kind = "vendored-test-vector"
+subset = "testdata/vectors/execution-spec-tests-eip4788/timestamp_sequences.json"
+subset_sha256 = "db3c22489d1b569b347222742f8430fb4f26cb98657dce61b74b137d8d73b375"

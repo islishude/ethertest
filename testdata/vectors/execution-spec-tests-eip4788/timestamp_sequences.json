@@ -1,0 +1,20 @@
+{
+  "source": "https://github.com/ethereum/execution-spec-tests",
+  "commit": "10eaa63d5da2f50b63d4359968f36542212f9f50",
+  "path": "tests/cancun/eip4788_beacon_root/test_beacon_root_contract.py",
+  "history_buffer_length": 8191,
+  "cases": [
+    {
+      "id": "buffer_wraparound",
+      "start": 8186,
+      "step": 1,
+      "count": 10
+    },
+    {
+      "id": "buffer_wraparound_overwrite_high_timestamp",
+      "start": 4294967296,
+      "step": 8191,
+      "count": 10
+    }
+  ]
+}

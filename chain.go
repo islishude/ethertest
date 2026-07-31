@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
@@ -24,22 +25,37 @@ import (
 var blobNamespace = []byte("ethertest/blob/")
 
 type executionChain struct {
-	mu           sync.RWMutex
-	config       *params.ChainConfig
-	db           ethdb.Database
-	blockchain   *core.BlockChain
-	accounts     []Account
-	feeRecipient common.Address
-	slot         uint64
-	genesisTime  uint64
-	slotDuration uint64
-	slotByHash   map[common.Hash]uint64
-	blockBySlot  map[uint64]common.Hash
-	pending      map[common.Address]map[uint64]*types.Transaction
-	arrival      map[common.Hash]uint64
-	nextArrival  uint64
-	blobs        map[common.Hash]*types.BlobTxSidecar
-	order        string
+	mu                   sync.RWMutex
+	config               *params.ChainConfig
+	db                   ethdb.Database
+	blockchain           *core.BlockChain
+	accounts             []Account
+	feeRecipient         common.Address
+	slot                 uint64
+	genesisTime          uint64
+	slotDuration         uint64
+	slotByHash           map[common.Hash]uint64
+	canonicalBlockBySlot map[uint64]common.Hash
+	lastProcessedSlot    uint64
+	timelineComplete     bool
+	blockSafety          map[common.Hash]BlockSafety
+	sessionTainted       bool
+	firstUnsafeBlock     *common.Hash
+	taintReasons         map[string]struct{}
+	pending              map[common.Address]map[uint64]*types.Transaction
+	arrival              map[common.Hash]uint64
+	nextArrival          uint64
+	blobs                map[common.Hash]*types.BlobTxSidecar
+	order                string
+	pendingView          *pendingView
+}
+
+type pendingView struct {
+	block      *types.Block
+	state      *state.StateDB
+	receipts   types.Receipts
+	executable map[common.Hash]struct{}
+	queued     map[common.Hash]struct{}
 }
 
 // executionChainConfig pins ethertest's supported protocol surface. Do not
@@ -79,7 +95,7 @@ func executionChainConfig(cfg Config) *params.ChainConfig {
 	}
 }
 
-func newExecutionChain(cfg Config) (*executionChain, error) {
+func newExecutionChain(cfg *Config) (*executionChain, error) {
 	accounts, err := DeriveAccounts(cfg.Accounts.Mnemonic, cfg.Accounts.Count)
 	if err != nil {
 		return nil, err
@@ -97,7 +113,33 @@ func newExecutionChain(cfg Config) (*executionChain, error) {
 	default:
 		return nil, fmt.Errorf("unsupported storage engine %q", cfg.Storage.Engine)
 	}
-	chainConfig := executionChainConfig(cfg)
+	existingData := false
+	iterator := database.NewIterator(nil, nil)
+	if iterator.Next() {
+		existingData = true
+	}
+	if err := iterator.Error(); err != nil {
+		iterator.Release()
+		_ = database.Close() //nolint:errcheck
+		return nil, err
+	}
+	iterator.Release()
+	if existingData {
+		storedGenesisTime, err := readPersistedGenesisTime(database)
+		if err != nil {
+			_ = database.Close() //nolint:errcheck
+			return nil, err
+		}
+		if cfg.Chain.GenesisTime == 0 {
+			cfg.Chain.GenesisTime = int64(storedGenesisTime)
+		} else if uint64(cfg.Chain.GenesisTime) != storedGenesisTime {
+			_ = database.Close() //nolint:errcheck
+			return nil, fmt.Errorf("configured genesis time %d does not match stored genesis time %d", cfg.Chain.GenesisTime, storedGenesisTime)
+		}
+	} else if cfg.Chain.GenesisTime == 0 {
+		cfg.Chain.GenesisTime = time.Now().UTC().Unix()
+	}
+	chainConfig := executionChainConfig(*cfg)
 	genesis := core.DeveloperGenesisBlock(cfg.Chain.GasLimit, nil)
 	genesis.Config = chainConfig
 	genesis.Timestamp = uint64(cfg.Chain.GenesisTime)
@@ -128,7 +170,7 @@ func newExecutionChain(cfg Config) (*executionChain, error) {
 		feeRecipient = common.HexToAddress(cfg.Mining.FeeRecipient)
 	}
 	slotByHash := make(map[common.Hash]uint64)
-	blockBySlot := make(map[uint64]common.Hash)
+	canonicalBlockBySlot := make(map[uint64]common.Hash)
 	for number := uint64(0); number <= blockchain.CurrentBlock().Number.Uint64(); number++ {
 		block := blockchain.GetBlockByNumber(number)
 		if block == nil {
@@ -139,18 +181,26 @@ func newExecutionChain(cfg Config) (*executionChain, error) {
 			slot = (block.Time() - uint64(cfg.Chain.GenesisTime)) / uint64(cfg.Chain.SlotDuration/time.Second)
 		}
 		slotByHash[block.Hash()] = slot
-		blockBySlot[slot] = block.Hash()
+		canonicalBlockBySlot[slot] = block.Hash()
 	}
 	currentSlot := slotByHash[blockchain.CurrentBlock().Hash()]
-	return &executionChain{
+	chain := &executionChain{
 		config: chainConfig, db: database, blockchain: blockchain,
 		accounts: accounts, feeRecipient: feeRecipient,
 		pending: make(map[common.Address]map[uint64]*types.Transaction),
 		arrival: make(map[common.Hash]uint64),
 		blobs:   make(map[common.Hash]*types.BlobTxSidecar), order: cfg.Mining.Order,
 		genesisTime: uint64(cfg.Chain.GenesisTime), slotDuration: uint64(cfg.Chain.SlotDuration / time.Second),
-		slot: currentSlot, slotByHash: slotByHash, blockBySlot: blockBySlot,
-	}, nil
+		slot: currentSlot, slotByHash: slotByHash, canonicalBlockBySlot: canonicalBlockBySlot,
+		lastProcessedSlot: currentSlot, timelineComplete: true,
+		blockSafety: make(map[common.Hash]BlockSafety), taintReasons: make(map[string]struct{}),
+	}
+	if err := initializeRuntimeMetadata(chain, existingData); err != nil {
+		chain.blockchain.Stop()
+		_ = database.Close() //nolint:errcheck
+		return nil, err
+	}
+	return chain, nil
 }
 
 func parseBalance(value string) (*big.Int, error) {
@@ -182,27 +232,12 @@ func (c *executionChain) addTransaction(tx *types.Transaction) error {
 	if err := txpool.ValidateTransaction(tx, head, signer, opts); err != nil {
 		return err
 	}
-	if sidecar := tx.BlobTxSidecar(); sidecar != nil {
-		if err := kzg4844.VerifyCellProofs(sidecar.Blobs, sidecar.Commitments, sidecar.Proofs); err != nil {
-			return fmt.Errorf("%w: %v", txpool.ErrKZGVerificationError, err)
-		}
-	}
 	from, _ := types.Sender(signer, tx)
 	state, err := c.blockchain.StateAt(head)
 	if err != nil {
 		return err
 	}
-	if tx.Nonce() < state.GetNonce(from) {
-		return fmt.Errorf("%w: next nonce %d, tx nonce %d", core.ErrNonceTooLow, state.GetNonce(from), tx.Nonce())
-	}
-	if state.GetBalance(from).ToBig().Cmp(tx.Cost()) < 0 {
-		return core.ErrInsufficientFunds
-	}
 	byNonce := c.pending[from]
-	if byNonce == nil {
-		byNonce = make(map[uint64]*types.Transaction)
-		c.pending[from] = byNonce
-	}
 	if previous := byNonce[tx.Nonce()]; previous != nil {
 		feeBump := new(big.Int).Mul(previous.GasFeeCap(), big.NewInt(110))
 		feeBump.Div(feeBump, big.NewInt(100))
@@ -211,6 +246,41 @@ func (c *executionChain) addTransaction(tx *types.Transaction) error {
 		if tx.GasFeeCap().Cmp(feeBump) < 0 || tx.GasTipCap().Cmp(tipBump) < 0 {
 			return errors.New("replacement transaction underpriced")
 		}
+	}
+	if err := txpool.ValidateTransactionWithState(tx, signer, &txpool.ValidationOptionsWithState{
+		State: state,
+		ExistingExpenditure: func(address common.Address) *big.Int {
+			total := new(big.Int)
+			for _, pooled := range c.pending[address] {
+				total.Add(total, pooled.Cost())
+			}
+			return total
+		},
+		ExistingCost: func(address common.Address, nonce uint64) *big.Int {
+			if pooled := c.pending[address][nonce]; pooled != nil {
+				return pooled.Cost()
+			}
+			return nil
+		},
+	}); err != nil {
+		return err
+	}
+	var encodedSidecar []byte
+	if sidecar := tx.BlobTxSidecar(); sidecar != nil {
+		if err := kzg4844.VerifyCellProofs(sidecar.Blobs, sidecar.Commitments, sidecar.Proofs); err != nil {
+			return fmt.Errorf("%w: %v", txpool.ErrKZGVerificationError, err)
+		}
+		encodedSidecar, err = rlp.EncodeToBytes(sidecar)
+		if err != nil {
+			return err
+		}
+		if err := c.db.Put(append(append([]byte(nil), blobNamespace...), tx.Hash().Bytes()...), encodedSidecar); err != nil {
+			return err
+		}
+	}
+	if byNonce == nil {
+		byNonce = make(map[uint64]*types.Transaction)
+		c.pending[from] = byNonce
 	}
 	if previous := byNonce[tx.Nonce()]; previous != nil {
 		c.arrival[tx.Hash()] = c.arrival[previous.Hash()]
@@ -221,13 +291,6 @@ func (c *executionChain) addTransaction(tx *types.Transaction) error {
 	}
 	byNonce[tx.Nonce()] = tx
 	if sidecar := tx.BlobTxSidecar(); sidecar != nil {
-		encoded, err := rlp.EncodeToBytes(sidecar)
-		if err != nil {
-			return err
-		}
-		if err := c.db.Put(append(append([]byte(nil), blobNamespace...), tx.Hash().Bytes()...), encoded); err != nil {
-			return err
-		}
 		c.blobs[tx.Hash()] = sidecar.Copy()
 	}
 	return nil
@@ -274,20 +337,50 @@ func (c *executionChain) transactionBefore(left, right *types.Transaction) bool 
 	return left.Hash().Hex() < right.Hash().Hex()
 }
 
-func (c *executionChain) mine(slotDuration uint64, empty bool) (block *types.Block, receipts types.Receipts, err error) {
+func (c *executionChain) buildBlock(slotDuration uint64, empty bool, parentBeaconRoot common.Hash) (block *types.Block, receipts types.Receipts, targetSlot uint64, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	parentHeader := c.blockchain.CurrentBlock()
 	parent := c.blockchain.GetBlock(parentHeader.Hash(), parentHeader.Number.Uint64())
 	txs, err := c.executableTransactions()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if empty {
 		txs = nil
 	}
-	targetSlot := c.slot + 1
+	targetSlot = c.slot + 1
 	targetTime := c.genesisTime + targetSlot*slotDuration
+	if len(txs) == 0 {
+		block, receipts, err = c.generateBlock(parent, targetTime, parentBeaconRoot, nil)
+		return block, receipts, targetSlot, err
+	}
+	// Build the candidate incrementally. A transaction that became invalid after
+	// a head change blocks only its own sender's nonce frontier; other senders
+	// remain eligible for the block.
+	signer := types.MakeSigner(c.config, new(big.Int).Add(parent.Number(), big.NewInt(1)), targetTime)
+	accepted := make([]*types.Transaction, 0, len(txs))
+	blocked := make(map[common.Address]struct{})
+	for _, tx := range txs {
+		from, senderErr := types.Sender(signer, tx)
+		if senderErr != nil {
+			continue
+		}
+		if _, exists := blocked[from]; exists {
+			continue
+		}
+		trial := append(append(make([]*types.Transaction, 0, len(accepted)+1), accepted...), tx)
+		if _, _, trialErr := c.generateBlock(parent, targetTime, parentBeaconRoot, trial); trialErr != nil {
+			blocked[from] = struct{}{}
+			continue
+		}
+		accepted = trial
+	}
+	block, receipts, err = c.generateBlock(parent, targetTime, parentBeaconRoot, accepted)
+	return block, receipts, targetSlot, err
+}
+
+func (c *executionChain) generateBlock(parent *types.Block, targetTime uint64, parentBeaconRoot common.Hash, txs []*types.Transaction) (block *types.Block, receipts types.Receipts, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("block generation failed: %v", recovered)
@@ -298,21 +391,19 @@ func (c *executionChain) mine(slotDuration uint64, empty bool) (block *types.Blo
 		gen.OffsetTime(int64(targetTime) - int64(gen.Timestamp()))
 		gen.SetPoS()
 		gen.SetCoinbase(c.feeRecipient)
-		gen.SetParentBeaconRoot(parent.Hash())
-		var gas uint64
+		gen.SetParentBeaconRoot(parentBeaconRoot)
 		for _, tx := range txs {
-			if gas+tx.Gas() > parent.GasLimit() {
-				continue
-			}
 			gen.AddTxWithChain(c.blockchain, tx.WithoutBlobTxSidecar())
-			gas += tx.Gas()
 		}
 	})
-	if _, err := c.blockchain.InsertChain(blocks); err != nil {
-		return nil, nil, err
-	}
 	block = blocks[0]
 	receipts = receiptSets[0]
+	return block, receipts, nil
+}
+
+func (c *executionChain) applyCanonicalBlock(block *types.Block, targetSlot uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for _, tx := range block.Transactions() {
 		signer := types.MakeSigner(c.config, block.Number(), block.Time())
 		from, senderErr := types.Sender(signer, tx)
@@ -325,23 +416,16 @@ func (c *executionChain) mine(slotDuration uint64, empty bool) (block *types.Blo
 		}
 	}
 	c.slot = targetSlot
+	c.lastProcessedSlot = targetSlot
 	c.slotByHash[block.Hash()] = targetSlot
-	c.blockBySlot[targetSlot] = block.Hash()
-	return block, receipts, nil
-}
-
-func (c *executionChain) missedSlot() uint64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.slot++
-	return c.slot
+	c.canonicalBlockBySlot[targetSlot] = block.Hash()
 }
 
 func (c *executionChain) blockAtOrBeforeSlot(slot uint64) *types.Block {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	for {
-		if hash, ok := c.blockBySlot[slot]; ok {
+		if hash, ok := c.canonicalBlockBySlot[slot]; ok {
 			block := c.blockchain.GetBlockByHash(hash)
 			if block != nil && c.blockchain.GetCanonicalHash(block.NumberU64()) == hash {
 				return block
@@ -402,4 +486,66 @@ func (c *executionChain) pendingCount() int {
 		total += len(txs)
 	}
 	return total
+}
+
+func (c *executionChain) feeRecipientAddress() common.Address {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.feeRecipient
+}
+
+func (c *executionChain) setFeeRecipient(address common.Address) {
+	c.mu.Lock()
+	c.feeRecipient = address
+	c.mu.Unlock()
+}
+
+func (c *executionChain) setPendingView(block *types.Block, statedb *state.StateDB, receipts types.Receipts) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	executable := make(map[common.Hash]struct{}, len(block.Transactions()))
+	for _, tx := range block.Transactions() {
+		executable[tx.Hash()] = struct{}{}
+	}
+	queued := make(map[common.Hash]struct{})
+	for _, byNonce := range c.pending {
+		for _, tx := range byNonce {
+			if _, exists := executable[tx.Hash()]; !exists {
+				queued[tx.Hash()] = struct{}{}
+			}
+		}
+	}
+	c.pendingView = &pendingView{
+		block: block, state: statedb.Copy(), receipts: receipts,
+		executable: executable, queued: queued,
+	}
+}
+
+func (c *executionChain) pendingBlock() *types.Block {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.pendingView == nil {
+		return nil
+	}
+	return c.pendingView.block
+}
+
+func (c *executionChain) pendingSnapshot() (*types.Block, *state.StateDB, types.Receipts) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.pendingView == nil {
+		return nil, nil, nil
+	}
+	return c.pendingView.block, c.pendingView.state.Copy(), append(types.Receipts(nil), c.pendingView.receipts...)
+}
+
+func (c *executionChain) pendingClassification(hash common.Hash) (executable, queued bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.pendingView == nil {
+		return false, false
+	}
+	_, executable = c.pendingView.executable[hash]
+	_, queued = c.pendingView.queued[hash]
+	return executable, queued
 }

@@ -150,9 +150,6 @@ func LoadConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if cfg.Chain.GenesisTime == 0 {
-		cfg.Chain.GenesisTime = time.Now().UTC().Unix()
-	}
 	return cfg, cfg.Validate()
 }
 

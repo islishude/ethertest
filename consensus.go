@@ -23,6 +23,9 @@ import (
 
 const validatorRegistryLimitDepth = 40
 
+// consensusModel builds a deterministic synthetic Beacon projection. None of
+// its state roots, proposer choices, finality, or sync aggregates are outputs
+// of the BeaconState transition or canonical proposer-selection algorithms.
 type consensusModel struct {
 	keys                  []*bls.SecretKey
 	pubkeys               [][48]byte
@@ -65,6 +68,20 @@ func (b *consensusBlock) commitments() []deneb.KZGCommitment {
 		return b.deneb.Message.Body.BlobKZGCommitments
 	}
 	return b.electra.Message.Body.BlobKZGCommitments
+}
+
+func (b *consensusBlock) slot() uint64 {
+	if b.deneb != nil {
+		return uint64(b.deneb.Message.Slot)
+	}
+	return uint64(b.electra.Message.Slot)
+}
+
+func (b *consensusBlock) parentRoot() phase0.Root {
+	if b.deneb != nil {
+		return b.deneb.Message.ParentRoot
+	}
+	return b.electra.Message.ParentRoot
 }
 
 func newConsensusModel(cfg Config, executionAddresses []common.Address) (*consensusModel, error) {
@@ -220,6 +237,17 @@ func (m *consensusModel) signedBlockLocked(chain *executionChain, block *types.B
 	if existing := m.blocks[block.Hash()]; existing != nil {
 		return existing, nil
 	}
+	stored, _, exists, err := loadProjection(chain, block.Hash())
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		m.blocks[block.Hash()] = stored
+		return stored, nil
+	}
+	if block.NumberU64() != 0 && chain.blockchain.GetBlockByHash(block.Hash()) != nil {
+		return nil, fmt.Errorf("Beacon projection for published block %s is missing", block.Hash())
+	}
 	slot := chain.slotOf(block)
 	parentRoot := phase0.Root{}
 	if block.NumberU64() != 0 {
@@ -244,34 +272,34 @@ func (m *consensusModel) signedBlockLocked(chain *executionChain, block *types.B
 	var stateInput [40]byte
 	copy(stateInput[:32], block.Root().Bytes())
 	binary.LittleEndian.PutUint64(stateInput[32:], slot)
-	proposer := phase0.ValidatorIndex(slot % uint64(len(m.keys)))
-	stateRoot := phase0.Root(sha256.Sum256(stateInput[:]))
+	syntheticProposer := phase0.ValidatorIndex(slot % uint64(len(m.keys)))
+	syntheticStateRoot := phase0.Root(sha256.Sum256(stateInput[:]))
 	var signed *consensusBlock
 	if slot/m.slotsPerEpoch < m.forks.PragueEpoch {
 		denebBody := denebBodyFromElectra(body)
 		message := &deneb.BeaconBlock{
-			Slot: phase0.Slot(slot), ProposerIndex: proposer,
-			ParentRoot: parentRoot, StateRoot: stateRoot, Body: denebBody,
+			Slot: phase0.Slot(slot), ProposerIndex: syntheticProposer,
+			ParentRoot: parentRoot, StateRoot: syntheticStateRoot, Body: denebBody,
 		}
 		objectRoot, err := message.HashTreeRoot()
 		if err != nil {
 			return nil, err
 		}
-		signature, err := m.sign(objectRoot, phase0.DomainType{}, uint64(proposer), slot)
+		signature, err := m.sign(objectRoot, phase0.DomainType{}, uint64(syntheticProposer), slot)
 		if err != nil {
 			return nil, err
 		}
 		signed = &consensusBlock{deneb: &deneb.SignedBeaconBlock{Message: message, Signature: signature}}
 	} else {
 		message := &electra.BeaconBlock{
-			Slot: phase0.Slot(slot), ProposerIndex: proposer,
-			ParentRoot: parentRoot, StateRoot: stateRoot, Body: body,
+			Slot: phase0.Slot(slot), ProposerIndex: syntheticProposer,
+			ParentRoot: parentRoot, StateRoot: syntheticStateRoot, Body: body,
 		}
 		objectRoot, err := message.HashTreeRoot()
 		if err != nil {
 			return nil, err
 		}
-		signature, err := m.sign(objectRoot, phase0.DomainType{}, uint64(proposer), slot)
+		signature, err := m.sign(objectRoot, phase0.DomainType{}, uint64(syntheticProposer), slot)
 		if err != nil {
 			return nil, err
 		}
@@ -332,7 +360,7 @@ func (m *consensusModel) body(chain *executionChain, block *types.Block, slot ui
 		payload.ExcessBlobGas = *block.ExcessBlobGas()
 	}
 	var epochRoot [32]byte
-	binary.LittleEndian.PutUint64(epochRoot[:8], slot/8)
+	binary.LittleEndian.PutUint64(epochRoot[:8], slot/m.slotsPerEpoch)
 	randao, err := m.sign(epochRoot, phase0.DomainType{0x02, 0, 0, 0}, slot%uint64(len(m.keys)), slot)
 	if err != nil {
 		return nil, err

@@ -17,9 +17,20 @@ type Revision uint64
 type Event struct {
 	Revision    Revision    `json:"revision"`
 	Type        string      `json:"type"`
+	Slot        uint64      `json:"slot"`
 	BlockHash   common.Hash `json:"block_hash,omitempty"`
 	BlockNumber uint64      `json:"block_number,omitempty"`
 	Removed     bool        `json:"removed,omitempty"`
+	OldHead     common.Hash `json:"old_head,omitempty"`
+	NewHead     common.Hash `json:"new_head,omitempty"`
+	Depth       uint64      `json:"depth,omitempty"`
+}
+
+type eventPlan struct {
+	events  []Event
+	puts    []journalKV
+	deletes [][]byte
+	next    Revision
 }
 
 type eventLog struct {
@@ -56,45 +67,45 @@ func newEventLog(capacity uint64, db ethdb.Database) (*eventLog, error) {
 	return log, nil
 }
 
-func (l *eventLog) append(event Event) (Event, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	event.Revision = l.next
-	encoded, err := json.Marshal(event)
-	if err != nil {
-		return Event{}, err
+func (l *eventLog) plan(events []Event) (eventPlan, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	plan := eventPlan{events: append([]Event(nil), events...), next: l.next}
+	for index := range plan.events {
+		plan.events[index].Revision = plan.next
+		encoded, err := json.Marshal(plan.events[index])
+		if err != nil {
+			return eventPlan{}, err
+		}
+		plan.puts = append(plan.puts, journalKV{Key: eventKey(plan.next), Value: encoded})
+		plan.next++
 	}
 	var next [8]byte
-	binary.BigEndian.PutUint64(next[:], uint64(l.next+1))
-	batch := l.db.NewBatch()
-	if err := batch.Put(eventKey(event.Revision), encoded); err != nil {
-		return Event{}, err
-	}
-	if err := batch.Put(eventNextKey, next[:]); err != nil {
-		return Event{}, err
-	}
-	var removed *Event
-	if uint64(len(l.events)) > l.capacity {
-		return Event{}, errors.New("event log capacity invariant violated")
-	}
-	if uint64(len(l.events)) == l.capacity {
-		oldest := l.events[0]
-		removed = &oldest
-		if err := batch.Delete(eventKey(oldest.Revision)); err != nil {
-			return Event{}, err
+	binary.BigEndian.PutUint64(next[:], uint64(plan.next))
+	plan.puts = append(plan.puts, journalKV{Key: append([]byte(nil), eventNextKey...), Value: next[:]})
+	retained := append(append([]Event(nil), l.events...), plan.events...)
+	if uint64(len(retained)) > l.capacity {
+		remove := len(retained) - int(l.capacity)
+		for _, event := range retained[:remove] {
+			plan.deletes = append(plan.deletes, eventKey(event.Revision))
 		}
 	}
-	if err := batch.Write(); err != nil {
-		return Event{}, err
+	return plan, nil
+}
+
+func (l *eventLog) apply(plan eventPlan) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(plan.events) == 0 {
+		return
 	}
-	l.next++
-	l.events = append(l.events, event)
-	if removed != nil {
-		l.events = l.events[1:]
+	l.next = plan.next
+	l.events = append(l.events, plan.events...)
+	if uint64(len(l.events)) > l.capacity {
+		l.events = l.events[len(l.events)-int(l.capacity):]
 	}
 	close(l.changed)
 	l.changed = make(chan struct{})
-	return event, nil
 }
 
 func eventKey(revision Revision) []byte {

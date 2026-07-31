@@ -29,35 +29,43 @@ type commandResult struct {
 }
 
 type Node struct {
-	cfg          Config
-	chain        *executionChain
-	events       *eventLog
-	commands     chan command
-	stopping     chan struct{}
-	done         chan struct{}
-	stopSignal   sync.Once
-	stopOnce     sync.Once
-	running      atomic.Bool
-	rpcServer    *rpc.Server
-	httpServer   *http.Server
-	httpEndpoint string
-	nextSnapshot uint64
-	snapshots    map[uint64]*chainPoint
-	checkpoints  map[string]*chainPoint
-	branches     map[string]*branch
-	consensus    *consensusModel
-	logger       *slog.Logger
-	startedAt    time.Time
-	progress     progressReporter
+	cfg              Config
+	chain            *executionChain
+	events           *eventLog
+	commands         chan command
+	stopping         chan struct{}
+	done             chan struct{}
+	stopSignal       sync.Once
+	stopOnce         sync.Once
+	running          atomic.Bool
+	rpcServer        *rpc.Server
+	httpServer       *http.Server
+	httpEndpoint     string
+	nextSnapshot     uint64
+	snapshots        map[uint64]*chainPoint
+	checkpoints      map[string]*chainPoint
+	branches         map[string]*branch
+	consensus        *consensusModel
+	logger           *slog.Logger
+	startedAt        time.Time
+	progress         progressReporter
+	miningMu         sync.RWMutex
+	miningMode       string
+	resumeMiningMode string
+	miningChanged    chan struct{}
 
 	intervalFailure         string
 	intervalFailureLoggedAt time.Time
+	writeErr                error
+	commitHook              func(commitStage) error
 }
 
 type chainPoint struct {
-	hash   common.Hash
-	number uint64
-	used   bool
+	hash    common.Hash
+	number  uint64
+	slot    uint64
+	tainted bool
+	used    bool
 }
 
 type branch struct {
@@ -69,9 +77,6 @@ type branch struct {
 }
 
 func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
-	if cfg.Chain.GenesisTime == 0 {
-		cfg.Chain.GenesisTime = time.Now().UTC().Unix()
-	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -81,7 +86,7 @@ func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
 			apply(&options)
 		}
 	}
-	chain, err := newExecutionChain(cfg)
+	chain, err := newExecutionChain(&cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -100,6 +105,12 @@ func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
 		commands: make(chan command), stopping: make(chan struct{}), done: make(chan struct{}),
 		snapshots: make(map[uint64]*chainPoint), checkpoints: checkpoints,
 		branches: branches, logger: options.logger,
+		miningMode: cfg.Mining.Mode, miningChanged: make(chan struct{}, 1),
+	}
+	if cfg.Mining.Mode == "manual" {
+		n.resumeMiningMode = "transaction"
+	} else {
+		n.resumeMiningMode = cfg.Mining.Mode
 	}
 	consensus, err := newConsensusModel(cfg, accountsFromChain(chain))
 	if err != nil {
@@ -107,6 +118,22 @@ func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
 		return nil, err
 	}
 	n.consensus = consensus
+	if _, err := n.consensus.ensureProjection(chain, chain.blockchain.Genesis()); err != nil {
+		_ = chain.close()
+		return nil, err
+	}
+	if err := validateRuntimeMetadata(chain); err != nil {
+		_ = chain.close()
+		return nil, fmt.Errorf("validate persisted runtime metadata: %w", err)
+	}
+	if err := validateControlMetadata(chain, checkpoints, branches); err != nil {
+		_ = chain.close()
+		return nil, fmt.Errorf("validate persisted control metadata: %w", err)
+	}
+	if err := n.rebuildPendingView(chain); err != nil {
+		_ = chain.close()
+		return nil, err
+	}
 	return n, nil
 }
 
@@ -122,7 +149,13 @@ func (n *Node) Snapshot(ctx context.Context) (uint64, error) {
 	value, err := n.execute(ctx, func(chain *executionChain) (any, error) {
 		head := chain.blockchain.CurrentBlock()
 		n.nextSnapshot++
-		n.snapshots[n.nextSnapshot] = &chainPoint{hash: head.Hash(), number: head.Number.Uint64()}
+		chain.mu.RLock()
+		pointSlot := chain.slot
+		tainted := chain.blockSafety[head.Hash()].Tainted
+		chain.mu.RUnlock()
+		n.snapshots[n.nextSnapshot] = &chainPoint{
+			hash: head.Hash(), number: head.Number.Uint64(), slot: pointSlot, tainted: tainted,
+		}
 		n.logger.Debug("snapshot created",
 			"event", "snapshot_created",
 			"snapshot_id", n.nextSnapshot,
@@ -147,7 +180,7 @@ func (n *Node) Revert(ctx context.Context, id uint64) (bool, error) {
 		if target == nil {
 			return false, errors.New("snapshot block is unavailable")
 		}
-		if err := n.switchCanonical(chain, target); err != nil {
+		if err := n.switchCanonical(chain, target, point.slot); err != nil {
 			return false, err
 		}
 		point.used = true
@@ -171,7 +204,12 @@ func (n *Node) Checkpoint(ctx context.Context, name string) error {
 	}
 	_, err := n.execute(ctx, func(chain *executionChain) (any, error) {
 		head := chain.blockchain.CurrentBlock()
-		point := &chainPoint{hash: head.Hash(), number: head.Number.Uint64()}
+		chain.mu.RLock()
+		point := &chainPoint{
+			hash: head.Hash(), number: head.Number.Uint64(), slot: chain.slot,
+			tainted: chain.blockSafety[head.Hash()].Tainted,
+		}
+		chain.mu.RUnlock()
 		if err := persistCheckpoint(chain.db, name, point); err != nil {
 			return nil, err
 		}
@@ -197,7 +235,7 @@ func (n *Node) Restore(ctx context.Context, name string) error {
 		if target == nil {
 			return nil, errors.New("checkpoint block is unavailable")
 		}
-		if err := n.switchCanonical(chain, target); err != nil {
+		if err := n.switchCanonical(chain, target, point.slot); err != nil {
 			return nil, err
 		}
 		n.logger.Info("checkpoint restored",
@@ -236,7 +274,7 @@ func (n *Node) Start() error {
 		"head_number", head.Number.Uint64(),
 		"head_hash", head.Hash().Hex(),
 		"slot", n.chain.currentSlot(),
-		"mining_mode", n.cfg.Mining.Mode,
+		"mining_mode", n.currentMiningMode(),
 		"storage_engine", n.cfg.Storage.Engine,
 		"restored", head.Number.Uint64() != 0,
 		"execution_endpoint", endpoints.Execution,
@@ -256,11 +294,22 @@ func (n *Node) run() {
 	defer close(n.done)
 	var ticker *time.Ticker
 	var ticks <-chan time.Time
-	if n.cfg.Mining.Mode == "interval" {
-		ticker = time.NewTicker(n.cfg.Mining.Interval)
-		ticks = ticker.C
-		defer ticker.Stop()
+	resetMiningTicker := func() {
+		if ticker != nil {
+			ticker.Stop()
+			ticker, ticks = nil, nil
+		}
+		if n.currentMiningMode() == "interval" {
+			ticker = time.NewTicker(n.cfg.Mining.Interval)
+			ticks = ticker.C
+		}
 	}
+	resetMiningTicker()
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
 	var progressTicker *time.Ticker
 	var progressTicks <-chan time.Time
 	background := context.Background()
@@ -284,17 +333,18 @@ func (n *Node) run() {
 			return
 		case <-progressTicks:
 			n.flushProgress()
+		case <-n.miningChanged:
+			resetMiningTicker()
 		case <-ticks:
+			if n.currentMiningMode() != "interval" {
+				continue
+			}
 			if n.chain.pendingCount() == 0 && !n.cfg.Mining.AutoMineEmpty {
 				continue
 			}
-			block, _, err := n.chain.mine(uint64(n.cfg.Chain.SlotDuration/time.Second), false)
+			block, _, err := n.mineExecutionBlock(n.chain, false)
 			if err != nil {
 				n.reportIntervalFailure("interval_mining_failed", "interval mining failed", err)
-				continue
-			}
-			if _, err := n.events.append(Event{Type: "block", BlockHash: block.Hash(), BlockNumber: block.NumberU64()}); err != nil {
-				n.reportIntervalFailure("interval_event_append_failed", "interval mining event append failed", err)
 				continue
 			}
 			n.reportIntervalRecovery()
@@ -329,18 +379,18 @@ func (n *Node) SendTransaction(ctx context.Context, tx *types.Transaction) (comm
 		if err := chain.addTransaction(tx); err != nil {
 			return common.Hash{}, err
 		}
+		if err := n.rebuildPendingView(chain); err != nil {
+			return common.Hash{}, err
+		}
 		n.logger.Debug("transaction accepted",
 			"event", "transaction_accepted",
 			"transaction_hash", tx.Hash().Hex(),
 			"transaction_type", tx.Type(),
 			"nonce", tx.Nonce(),
 		)
-		if n.cfg.Mining.Mode == "transaction" {
-			block, _, err := chain.mine(uint64(n.cfg.Chain.SlotDuration/time.Second), false)
+		if n.currentMiningMode() == "transaction" {
+			block, _, err := n.mineExecutionBlock(chain, false)
 			if err != nil {
-				return common.Hash{}, err
-			}
-			if _, err := n.events.append(Event{Type: "block", BlockHash: block.Hash(), BlockNumber: block.NumberU64()}); err != nil {
 				return common.Hash{}, err
 			}
 			n.recordAutomaticBlock(block, "transaction")
@@ -353,6 +403,31 @@ func (n *Node) SendTransaction(ctx context.Context, tx *types.Transaction) (comm
 	return value.(common.Hash), nil
 }
 
+func (n *Node) currentMiningMode() string {
+	n.miningMu.RLock()
+	defer n.miningMu.RUnlock()
+	return n.miningMode
+}
+
+func (n *Node) setMiningMode(mode string) {
+	n.miningMu.Lock()
+	n.miningMode = mode
+	if mode != "manual" {
+		n.resumeMiningMode = mode
+	}
+	n.miningMu.Unlock()
+	select {
+	case n.miningChanged <- struct{}{}:
+	default:
+	}
+}
+
+func (n *Node) resumeMode() string {
+	n.miningMu.RLock()
+	defer n.miningMu.RUnlock()
+	return n.resumeMiningMode
+}
+
 func (n *Node) Mine(ctx context.Context, count uint64, empty bool) ([]common.Hash, error) {
 	value, err := n.execute(ctx, func(chain *executionChain) (any, error) {
 		hashes := make([]common.Hash, 0, count)
@@ -360,7 +435,7 @@ func (n *Node) Mine(ctx context.Context, count uint64, empty bool) ([]common.Has
 		var lastNumber uint64
 		var transactions uint64
 		for range count {
-			block, _, err := chain.mine(uint64(n.cfg.Chain.SlotDuration/time.Second), empty)
+			block, _, err := n.mineExecutionBlock(chain, empty)
 			if err != nil {
 				return nil, err
 			}
@@ -370,9 +445,6 @@ func (n *Node) Mine(ctx context.Context, count uint64, empty bool) ([]common.Has
 			}
 			lastNumber = block.NumberU64()
 			transactions += uint64(len(block.Transactions()))
-			if _, err := n.events.append(Event{Type: "block", BlockHash: block.Hash(), BlockNumber: block.NumberU64()}); err != nil {
-				return nil, err
-			}
 		}
 		if len(hashes) != 0 {
 			n.logger.Info("blocks mined",
@@ -395,13 +467,121 @@ func (n *Node) Mine(ctx context.Context, count uint64, empty bool) ([]common.Has
 	return value.([]common.Hash), nil
 }
 
+func (n *Node) mineExecutionBlock(chain *executionChain, empty bool) (*types.Block, types.Receipts, error) {
+	parentHeader := chain.blockchain.CurrentBlock()
+	parent := chain.blockchain.GetBlock(parentHeader.Hash(), parentHeader.Number.Uint64())
+	projection, err := n.consensus.ensureProjection(chain, parent)
+	if err != nil {
+		return nil, nil, err
+	}
+	block, receipts, targetSlot, err := chain.buildBlock(
+		uint64(n.cfg.Chain.SlotDuration/time.Second), empty, common.Hash(projection.Root),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	projectionPut, err := n.consensus.projectionPut(chain, block)
+	if err != nil {
+		return nil, nil, err
+	}
+	chain.mu.RLock()
+	parentSafety := chain.blockSafety[parent.Hash()]
+	timeline := chain.timeline()
+	chain.mu.RUnlock()
+	timeline.CurrentSlot = targetSlot
+	timeline.LastProcessedSlot = targetSlot
+	safety := blockSafetyForChild(parentSafety, block.Hash(), "")
+	timelineMutation, err := timelinePut(timeline)
+	if err != nil {
+		return nil, nil, err
+	}
+	safetyMutation, err := blockSafetyPut(block.Hash(), safety)
+	if err != nil {
+		return nil, nil, err
+	}
+	operation := preparedOperation{
+		Kind: "head", OldHead: parent.Hash(), NewHead: block.Hash(),
+		TargetNumber: block.NumberU64(), DiscardTargetOnCancel: true,
+		Puts: []journalKV{
+			timelineMutation, blockSlotPut(block.Hash(), targetSlot),
+			canonicalSlotPut(targetSlot, block.Hash()), safetyMutation, projectionPut,
+		},
+	}
+	events := []Event{{Type: "block", Slot: targetSlot, BlockHash: block.Hash(), BlockNumber: block.NumberU64()}}
+	if finalized := n.finalizedEventBetween(timeline.CurrentSlot-1, targetSlot); finalized != nil {
+		events = append(events, *finalized)
+	}
+	if err := n.commitPrepared(chain, operation, events, func() error {
+		_, insertErr := chain.blockchain.InsertChain(types.Blocks{block})
+		return insertErr
+	}, func() {
+		chain.applyCanonicalBlock(block, targetSlot)
+		chain.mu.Lock()
+		chain.blockSafety[block.Hash()] = safety
+		chain.mu.Unlock()
+	}); err != nil {
+		return nil, nil, err
+	}
+	if err := n.rebuildPendingView(chain); err != nil {
+		n.writeErr = err
+		return nil, nil, fmt.Errorf("block committed but pending view rebuild failed: %w", err)
+	}
+	return block, receipts, nil
+}
+
+func (n *Node) rebuildPendingView(chain *executionChain) error {
+	parentHeader := chain.blockchain.CurrentBlock()
+	parent := chain.blockchain.GetBlock(parentHeader.Hash(), parentHeader.Number.Uint64())
+	projection, err := n.consensus.ensureProjection(chain, parent)
+	if err != nil {
+		return err
+	}
+	block, receipts, _, err := chain.buildBlock(
+		uint64(n.cfg.Chain.SlotDuration/time.Second), false, common.Hash(projection.Root),
+	)
+	if err != nil {
+		return err
+	}
+	statedb, err := chain.blockchain.StateAt(block.Header())
+	if err != nil {
+		return err
+	}
+	chain.setPendingView(block, statedb, receipts)
+	return nil
+}
+
 func (n *Node) MissSlots(ctx context.Context, count uint64) ([]uint64, error) {
 	value, err := n.execute(ctx, func(chain *executionChain) (any, error) {
 		slots := make([]uint64, 0, count)
-		for range count {
-			slot := chain.missedSlot()
+		chain.mu.RLock()
+		start := chain.slot
+		timeline := chain.timeline()
+		chain.mu.RUnlock()
+		events := make([]Event, 0, count)
+		for offset := uint64(1); offset <= count; offset++ {
+			slot := start + offset
 			slots = append(slots, slot)
-			if _, err := n.events.append(Event{Type: "missed_slot"}); err != nil {
+			events = append(events, Event{Type: "missed_slot", Slot: slot})
+		}
+		if count != 0 {
+			timeline.CurrentSlot = start + count
+			timeline.LastProcessedSlot = start + count
+			mutation, err := timelinePut(timeline)
+			if err != nil {
+				return nil, err
+			}
+			if finalized := n.finalizedEventBetween(start, start+count); finalized != nil {
+				events = append(events, *finalized)
+			}
+			if err := n.commitAuxiliary(chain, []journalKV{mutation}, nil, events, func() {
+				chain.mu.Lock()
+				chain.slot = start + count
+				chain.lastProcessedSlot = start + count
+				chain.mu.Unlock()
+			}); err != nil {
+				return nil, err
+			}
+			if err := n.rebuildPendingView(chain); err != nil {
 				return nil, err
 			}
 		}

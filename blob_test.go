@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"math/big"
 	"net/http"
@@ -15,7 +16,17 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/deneb"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
+	"github.com/ethereum/go-ethereum/ethdb"
 )
+
+type failingBlobDatabase struct{ ethdb.Database }
+
+func (db failingBlobDatabase) Put(key []byte, value []byte) error {
+	if bytes.HasPrefix(key, blobNamespace) {
+		return errors.New("injected blob database failure")
+	}
+	return db.Database.Put(key, value)
+}
 
 func TestPackedBytesV1RoundTrip(t *testing.T) {
 	payload := bytes.Repeat([]byte("ethertest"), 1000)
@@ -135,6 +146,50 @@ func TestOsakaBlobTransactionRejectsBadProofAndMinesValidSidecar(t *testing.T) {
 	}
 	if decoded.Index != 0 || decoded.KZGCommitment != envelope.Data[0].KZGCommitment {
 		t.Fatal("SSZ sidecar differs from JSON sidecar")
+	}
+}
+
+func TestBlobDatabaseFailureLeavesNoPoolResidue(t *testing.T) {
+	cfg := testConfig()
+	cfg.Mining.Mode = "manual"
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+	blob, err := EncodePackedBytesV1([]byte("database failure"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := SignBlobTransaction(BlobTransactionRequest{
+		ChainID: new(big.Int).SetUint64(cfg.Chain.ChainID), Nonce: 0,
+		To: node.chain.accounts[1].Address, Gas: 100_000,
+		GasTipCap: big.NewInt(1_000_000_000), GasFeeCap: big.NewInt(3_000_000_000),
+		BlobFeeCap: big.NewInt(1_000_000_000), Blob: blob,
+	}, node.chain.accounts[0].PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := node.chain.db
+	node.chain.db = failingBlobDatabase{Database: original}
+	if _, err := node.SendTransaction(context.Background(), tx); err == nil || !strings.Contains(err.Error(), "injected blob database failure") {
+		t.Fatalf("blob database error = %v", err)
+	}
+	node.chain.mu.RLock()
+	poolCount, arrivalCount, blobCount := 0, len(node.chain.arrival), len(node.chain.blobs)
+	for _, byNonce := range node.chain.pending {
+		poolCount += len(byNonce)
+	}
+	node.chain.mu.RUnlock()
+	if poolCount != 0 || arrivalCount != 0 || blobCount != 0 {
+		t.Fatalf("pool residue pending/arrival/blob = %d/%d/%d", poolCount, arrivalCount, blobCount)
+	}
+	key := append(append([]byte(nil), blobNamespace...), tx.Hash().Bytes()...)
+	if exists, err := original.Has(key); err != nil || exists {
+		t.Fatalf("blob database residue exists=%v err=%v", exists, err)
 	}
 }
 
@@ -328,13 +383,13 @@ func TestBeaconServeMuxPatternsAreExactAndPopulatePathValues(t *testing.T) {
 		}
 	}
 	for _, path := range []string{
-		"/eth/v1/beacon/blocks/genesis",
+		"/eth/v2/beacon/blocks/genesis",
 		"/eth/v1/beacon/states/genesis/validators",
 		"/eth/v1/beacon/states/genesis/validator_balances",
 		"/eth/v1/beacon/states/genesis/finality_checkpoints",
 		"/eth/v1/beacon/blobs/genesis",
 		"/eth/v1/beacon/blob_sidecars/genesis",
-		"/eth/v1/beacon/data_column_sidecars/genesis",
+		"/eth/v1/debug/beacon/data_column_sidecars/genesis",
 	} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		response := httptest.NewRecorder()
