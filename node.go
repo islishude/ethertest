@@ -32,6 +32,7 @@ type Node struct {
 	cfg              Config
 	chain            *executionChain
 	events           *eventLog
+	pendingEvents    *pendingHashLog
 	commands         chan command
 	stopping         chan struct{}
 	done             chan struct{}
@@ -101,7 +102,7 @@ func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
 		return nil, err
 	}
 	n := &Node{
-		cfg: cfg, chain: chain, events: events,
+		cfg: cfg, chain: chain, events: events, pendingEvents: newPendingHashLog(cfg.Events.Capacity),
 		commands: make(chan command), stopping: make(chan struct{}), done: make(chan struct{}),
 		snapshots: make(map[uint64]*chainPoint), checkpoints: checkpoints,
 		branches: branches, logger: options.logger,
@@ -382,6 +383,7 @@ func (n *Node) SendTransaction(ctx context.Context, tx *types.Transaction) (comm
 		if err := n.rebuildPendingView(chain); err != nil {
 			return common.Hash{}, err
 		}
+		n.pendingEvents.record(tx.Hash())
 		n.logger.Debug("transaction accepted",
 			"event", "transaction_accepted",
 			"transaction_hash", tx.Hash().Hex(),

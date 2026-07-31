@@ -1,5 +1,5 @@
 format = 1
-generated_at = "2026-07-31T00:00:00Z"
+generated_at = "2026-08-01T00:00:00Z"
 
 # Go dependencies are additionally locked by go.mod and go.sum. Normal builds
 # never fetch the specification repositories. spec_lock_test.go verifies every
@@ -20,8 +20,11 @@ kind = "go-module"
 [[source]]
 name = "execution-apis"
 url = "https://github.com/ethereum/execution-apis"
-ref = "e5d1bb60e6c064e4b15080da07b4370d0baadf92"
+ref = "v1.0.0-beta.7"
+commit = "5aebdfdd45cadeb723be4bd45b4611b71c8b1c85"
 kind = "vendored-spec"
+subset = "specs/upstream/execution-rpc-subset.json"
+subset_sha256 = "9eaa65b5af7ac2b7204ff4d16d93b488837b778d602a43195629234226c502ab"
 
 [[source]]
 name = "beacon-APIs"

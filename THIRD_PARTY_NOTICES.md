@@ -4,7 +4,9 @@
 libraries under their own licenses.
 
 In particular, the go-ethereum library is licensed under the GNU Lesser
-General Public License v3.0. Binary and container releases must not be
+General Public License v3.0. `rpc_transactions.go`, `rpc_simulate.go`, and
+`rpc_fee_config.go` contain adapted go-ethereum logic and retain file-level
+copyright and LGPL notices. Binary and container releases must not be
 published until the release workflow includes the corresponding source,
 license notices, reproducible build material, and the project's LGPL
 distribution review has passed.

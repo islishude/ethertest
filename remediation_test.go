@@ -827,15 +827,17 @@ func TestPendingRPCsShareFrozenCandidateState(t *testing.T) {
 		t.Fatalf("pending proof = %#v", proof)
 	}
 	var pendingBlock struct {
-		Hash         common.Hash   `json:"hash"`
-		StateRoot    common.Hash   `json:"stateRoot"`
-		Transactions []common.Hash `json:"transactions"`
+		Hash         *common.Hash      `json:"hash"`
+		Nonce        *types.BlockNonce `json:"nonce"`
+		Miner        *common.Address   `json:"miner"`
+		StateRoot    common.Hash       `json:"stateRoot"`
+		Transactions []common.Hash     `json:"transactions"`
 	}
 	if err := client.Call(&pendingBlock, "eth_getBlockByNumber", "pending", false); err != nil {
 		t.Fatal(err)
 	}
 	block, state, receipts := node.chain.pendingSnapshot()
-	if block == nil || state == nil || pendingBlock.Hash != block.Hash() || pendingBlock.StateRoot != block.Root() ||
+	if block == nil || state == nil || pendingBlock.Hash != nil || pendingBlock.Nonce != nil || pendingBlock.Miner != nil || pendingBlock.StateRoot != block.Root() ||
 		len(pendingBlock.Transactions) != 1 || pendingBlock.Transactions[0] != creation.Hash() || len(receipts) != 1 ||
 		state.GetState(contract, common.Hash{}) != common.BigToHash(big.NewInt(42)) {
 		t.Fatalf("pending candidate mismatch: rpc=%#v block=%v receipts=%d", pendingBlock, block, len(receipts))

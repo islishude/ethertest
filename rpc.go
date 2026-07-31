@@ -24,14 +24,14 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/eth/filters"
+	"github.com/ethereum/go-ethereum/eth/gasprice"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/eth/tracers/logger"
 	_ "github.com/ethereum/go-ethereum/eth/tracers/native"
-	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/holiman/uint256"
 )
 
 const Version = "0.1.0-alpha.1"
@@ -42,9 +42,14 @@ const (
 )
 
 type ethAPI struct {
-	node       *Node
-	filterMu   sync.Mutex
-	logFilters map[rpc.ID]*installedLogFilter
+	node      *Node
+	filterMu  sync.Mutex
+	filters   map[rpc.ID]*installedFilter
+	feeOnce   sync.Once
+	feeOracle *gasprice.Oracle
+	capMu     sync.Mutex
+	capHead   common.Hash
+	capOldest uint64
 }
 
 type txSyncTimeoutError struct {
@@ -69,9 +74,19 @@ func (err *txSyncTimeoutError) Error() string {
 func (err *txSyncTimeoutError) ErrorCode() int         { return 4 }
 func (err *txSyncTimeoutError) ErrorData() interface{} { return err.hash.Hex() }
 
-type installedLogFilter struct {
-	criteria  filters.FilterCriteria
-	nextBlock uint64
+type installedFilterKind uint8
+
+const (
+	installedLogFilter installedFilterKind = iota
+	installedBlockFilter
+	installedPendingTransactionFilter
+)
+
+type installedFilter struct {
+	kind       installedFilterKind
+	criteria   filters.FilterCriteria
+	revision   Revision
+	pendingSeq uint64
 }
 
 type accountProof struct {
@@ -85,7 +100,7 @@ type accountProof struct {
 }
 
 type storageProof struct {
-	Key   common.Hash  `json:"key"`
+	Key   string       `json:"key"`
 	Value *hexutil.Big `json:"value"`
 	Proof []string     `json:"proof"`
 }
@@ -98,17 +113,25 @@ type debugAPI struct{ node *Node }
 type personalAPI struct{ node *Node }
 
 type callArgs struct {
-	From                 *common.Address   `json:"from"`
-	To                   *common.Address   `json:"to"`
-	Gas                  *hexutil.Uint64   `json:"gas"`
-	GasPrice             *hexutil.Big      `json:"gasPrice"`
-	MaxFeePerGas         *hexutil.Big      `json:"maxFeePerGas"`
-	MaxPriorityFeePerGas *hexutil.Big      `json:"maxPriorityFeePerGas"`
-	Value                *hexutil.Big      `json:"value"`
-	Nonce                *hexutil.Uint64   `json:"nonce"`
-	Data                 *hexutil.Bytes    `json:"data"`
-	Input                *hexutil.Bytes    `json:"input"`
-	AccessList           *types.AccessList `json:"accessList"`
+	Type                 *hexutil.Uint64              `json:"type"`
+	From                 *common.Address              `json:"from"`
+	To                   *common.Address              `json:"to"`
+	Gas                  *hexutil.Uint64              `json:"gas"`
+	GasPrice             *hexutil.Big                 `json:"gasPrice"`
+	MaxFeePerGas         *hexutil.Big                 `json:"maxFeePerGas"`
+	MaxPriorityFeePerGas *hexutil.Big                 `json:"maxPriorityFeePerGas"`
+	Value                *hexutil.Big                 `json:"value"`
+	Nonce                *hexutil.Uint64              `json:"nonce"`
+	Data                 *hexutil.Bytes               `json:"data"`
+	Input                *hexutil.Bytes               `json:"input"`
+	AccessList           *types.AccessList            `json:"accessList"`
+	ChainID              *hexutil.Big                 `json:"chainId"`
+	BlobFeeCap           *hexutil.Big                 `json:"maxFeePerBlobGas"`
+	BlobHashes           []common.Hash                `json:"blobVersionedHashes,omitempty"`
+	Blobs                []kzg4844.Blob               `json:"blobs"`
+	Commitments          []kzg4844.Commitment         `json:"commitments"`
+	Proofs               []kzg4844.Proof              `json:"proofs"`
+	AuthorizationList    []types.SetCodeAuthorization `json:"authorizationList"`
 }
 
 // rpcTransaction mirrors geth's internal/ethapi.RPCTransaction. Keeping a
@@ -142,11 +165,12 @@ type rpcTransaction struct {
 }
 
 type overrideAccount struct {
-	Nonce     *hexutil.Uint64              `json:"nonce"`
-	Code      *hexutil.Bytes               `json:"code"`
-	Balance   *hexutil.Big                 `json:"balance"`
-	State     *map[common.Hash]common.Hash `json:"state"`
-	StateDiff *map[common.Hash]common.Hash `json:"stateDiff"`
+	Nonce            *hexutil.Uint64              `json:"nonce"`
+	Code             *hexutil.Bytes               `json:"code"`
+	Balance          *hexutil.Big                 `json:"balance"`
+	State            *map[common.Hash]common.Hash `json:"state"`
+	StateDiff        *map[common.Hash]common.Hash `json:"stateDiff"`
+	MovePrecompileTo *common.Address              `json:"movePrecompileToAddress"`
 }
 
 type stateOverride map[common.Address]overrideAccount
@@ -154,7 +178,7 @@ type stateOverride map[common.Address]overrideAccount
 func (n *Node) startServers() error {
 	server := rpc.NewServer()
 	server.SetBatchLimits(n.cfg.Limits.MaxBatchItems, int(n.cfg.Limits.MaxResponseBytes))
-	ethService := &ethAPI{node: n, logFilters: make(map[rpc.ID]*installedLogFilter)}
+	ethService := &ethAPI{node: n, filters: make(map[rpc.ID]*installedFilter)}
 	services := []struct {
 		namespace string
 		service   any
@@ -275,7 +299,8 @@ func (api *ethAPI) GetBalance(_ context.Context, address common.Address, selecto
 	if err != nil {
 		return nil, err
 	}
-	return (*hexutil.Big)(state.GetBalance(address).ToBig()), nil
+	balance := (*hexutil.Big)(state.GetBalance(address).ToBig())
+	return balance, state.Error()
 }
 
 func (api *ethAPI) GetTransactionCount(_ context.Context, address common.Address, selector rpc.BlockNumberOrHash) (hexutil.Uint64, error) {
@@ -283,7 +308,8 @@ func (api *ethAPI) GetTransactionCount(_ context.Context, address common.Address
 	if err != nil {
 		return 0, err
 	}
-	return hexutil.Uint64(state.GetNonce(address)), nil
+	nonce := hexutil.Uint64(state.GetNonce(address))
+	return nonce, state.Error()
 }
 
 func (api *ethAPI) GetCode(_ context.Context, address common.Address, selector rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
@@ -291,63 +317,93 @@ func (api *ethAPI) GetCode(_ context.Context, address common.Address, selector r
 	if err != nil {
 		return nil, err
 	}
-	return state.GetCode(address), nil
+	code := state.GetCode(address)
+	return code, state.Error()
 }
 
-func (api *ethAPI) GetStorageAt(_ context.Context, address common.Address, key common.Hash, selector rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
+func (api *ethAPI) GetStorageAt(_ context.Context, address common.Address, hexKey string, selector rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
+	key, err := decodeStorageKey(hexKey)
+	if err != nil {
+		return nil, &invalidParamsError{message: fmt.Sprintf("%v: %q", err, hexKey)}
+	}
 	_, state, err := api.node.resolveState(selector)
 	if err != nil {
 		return nil, err
 	}
 	value := state.GetState(address, key)
-	return value[:], nil
+	return value[:], state.Error()
 }
 
-func (api *ethAPI) GetProof(_ context.Context, address common.Address, keys []common.Hash, selector rpc.BlockNumberOrHash) (*accountProof, error) {
-	header, state, err := api.node.resolveState(selector)
+const maxGetProofKeys = 1024
+
+type orderedProofList []string
+
+func (proof *orderedProofList) Put(_ []byte, value []byte) error {
+	*proof = append(*proof, hexutil.Encode(value))
+	return nil
+}
+
+func (*orderedProofList) Delete([]byte) error { return errors.New("proof deletion is unsupported") }
+
+func (api *ethAPI) GetProof(ctx context.Context, address common.Address, encodedKeys []string, selector rpc.BlockNumberOrHash) (*accountProof, error) {
+	if len(encodedKeys) > maxGetProofKeys {
+		return nil, &invalidParamsError{message: fmt.Sprintf("too many storage keys requested (max %d, got %d)", maxGetProofKeys, len(encodedKeys))}
+	}
+	keys := make([]common.Hash, len(encodedKeys))
+	keyLengths := make([]int, len(encodedKeys))
+	for index, encoded := range encodedKeys {
+		var err error
+		keys[index], keyLengths[index], err = decodeStorageKeyWithLength(encoded)
+		if err != nil {
+			return nil, &invalidParamsError{message: fmt.Sprintf("%v: %q", err, encoded)}
+		}
+	}
+	header, statedb, err := api.node.resolveState(selector)
 	if err != nil {
 		return nil, err
 	}
-	accountTrie, err := state.Database().OpenTrie(header.Root)
+	accountTrie, err := statedb.Database().OpenTrie(header.Root)
 	if err != nil {
 		return nil, err
 	}
-	accountProofDB := memorydb.New()
-	if err := accountTrie.Prove(crypto.Keccak256(address.Bytes()), accountProofDB); err != nil {
+	accountProofNodes := make(orderedProofList, 0)
+	if err := accountTrie.Prove(crypto.Keccak256(address.Bytes()), &accountProofNodes); err != nil {
 		return nil, err
 	}
-	storageRoot := state.GetStorageRoot(address)
+	storageRoot := statedb.GetStorageRoot(address)
 	result := &accountProof{
-		Address: address, AccountProof: proofValues(accountProofDB),
-		Balance:  (*hexutil.Big)(state.GetBalance(address).ToBig()),
-		CodeHash: state.GetCodeHash(address), Nonce: hexutil.Uint64(state.GetNonce(address)),
+		Address: address, AccountProof: accountProofNodes,
+		Balance:  (*hexutil.Big)(statedb.GetBalance(address).ToBig()),
+		CodeHash: statedb.GetCodeHash(address), Nonce: hexutil.Uint64(statedb.GetNonce(address)),
 		StorageHash: storageRoot, StorageProof: make([]storageProof, len(keys)),
 	}
-	storageTrie, err := state.Database().OpenStorageTrie(header.Root, address, storageRoot, nil)
-	if err != nil {
-		return nil, err
-	}
-	for index, key := range keys {
-		proofDB := memorydb.New()
-		if err := storageTrie.Prove(crypto.Keccak256(key.Bytes()), proofDB); err != nil {
+	var storageTrie state.Trie
+	if storageRoot != types.EmptyRootHash && storageRoot != (common.Hash{}) {
+		storageTrie, err = statedb.Database().OpenStorageTrie(header.Root, address, storageRoot, nil)
+		if err != nil {
 			return nil, err
 		}
-		value := state.GetState(address, key).Big()
+	}
+	for index, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		outputKey := hexutil.EncodeBig(key.Big())
+		if keyLengths[index] == common.HashLength {
+			outputKey = hexutil.Encode(key[:])
+		}
+		proof := make(orderedProofList, 0)
+		if storageTrie != nil {
+			if err := storageTrie.Prove(crypto.Keccak256(key.Bytes()), &proof); err != nil {
+				return nil, err
+			}
+		}
+		value := statedb.GetState(address, key).Big()
 		result.StorageProof[index] = storageProof{
-			Key: key, Value: (*hexutil.Big)(value), Proof: proofValues(proofDB),
+			Key: outputKey, Value: (*hexutil.Big)(value), Proof: proof,
 		}
 	}
-	return result, nil
-}
-
-func proofValues(database *memorydb.Database) []string {
-	iterator := database.NewIterator(nil, nil)
-	defer iterator.Release()
-	result := make([]string, 0)
-	for iterator.Next() {
-		result = append(result, hexutil.Encode(iterator.Value()))
-	}
-	return result
+	return result, statedb.Error()
 }
 
 func (api *ethAPI) SendRawTransaction(ctx context.Context, raw hexutil.Bytes) (common.Hash, error) {
@@ -420,82 +476,19 @@ func (api *ethAPI) SendRawTransactionSync(ctx context.Context, raw hexutil.Bytes
 }
 
 func (api *ethAPI) SendTransaction(ctx context.Context, args callArgs) (common.Hash, error) {
-	tx, err := api.signTransaction(ctx, args)
+	tx, err := api.buildAndSignTransaction(ctx, args, false)
 	if err != nil {
 		return common.Hash{}, err
 	}
 	return api.node.SendTransaction(ctx, tx)
 }
 
-func (api *ethAPI) signTransaction(ctx context.Context, args callArgs) (*types.Transaction, error) {
-	if args.From == nil {
-		return nil, errors.New("from is required")
+func (api *ethAPI) Call(ctx context.Context, args callArgs, selector *rpc.BlockNumberOrHash, overrides *stateOverride) (hexutil.Bytes, error) {
+	blockSelector := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
+	if selector != nil {
+		blockSelector = *selector
 	}
-	var account *Account
-	for index := range api.node.chain.accounts {
-		if api.node.chain.accounts[index].Address == *args.From {
-			account = &api.node.chain.accounts[index]
-			break
-		}
-	}
-	if account == nil {
-		return nil, errors.New("unknown unlocked account")
-	}
-	selector := rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber)
-	nonce, err := api.GetTransactionCount(ctx, *args.From, selector)
-	if err != nil {
-		return nil, err
-	}
-	if args.Nonce != nil {
-		nonce = *args.Nonce
-	}
-	var gas uint64
-	if args.Gas != nil {
-		gas = uint64(*args.Gas)
-	} else {
-		estimate, err := api.EstimateGas(ctx, args, nil, nil)
-		if err != nil {
-			return nil, err
-		}
-		gas = uint64(estimate) * 120 / 100
-	}
-	value := new(big.Int)
-	if args.Value != nil {
-		value.Set((*big.Int)(args.Value))
-	}
-	tip := big.NewInt(1_000_000_000)
-	if args.MaxPriorityFeePerGas != nil {
-		tip.Set((*big.Int)(args.MaxPriorityFeePerGas))
-	} else if args.GasPrice != nil {
-		tip.Set((*big.Int)(args.GasPrice))
-	}
-	feeCap := new(big.Int).Mul(api.node.chain.blockchain.CurrentBlock().BaseFee, big.NewInt(2))
-	feeCap.Add(feeCap, tip)
-	if args.MaxFeePerGas != nil {
-		feeCap.Set((*big.Int)(args.MaxFeePerGas))
-	} else if args.GasPrice != nil {
-		feeCap.Set((*big.Int)(args.GasPrice))
-	}
-	var data []byte
-	if args.Input != nil {
-		data = *args.Input
-	} else if args.Data != nil {
-		data = *args.Data
-	}
-	var accessList types.AccessList
-	if args.AccessList != nil {
-		accessList = *args.AccessList
-	}
-	unsigned := types.NewTx(&types.DynamicFeeTx{
-		ChainID: api.node.chain.config.ChainID, Nonce: uint64(nonce),
-		GasTipCap: tip, GasFeeCap: feeCap, Gas: gas, To: args.To,
-		Value: value, Data: data, AccessList: accessList,
-	})
-	return types.SignTx(unsigned, types.LatestSignerForChainID(api.node.chain.config.ChainID), account.PrivateKey)
-}
-
-func (api *ethAPI) Call(ctx context.Context, args callArgs, selector rpc.BlockNumberOrHash, overrides *stateOverride) (hexutil.Bytes, error) {
-	result, err := api.executeCall(ctx, args, selector, 0, overrides)
+	result, err := api.executeCall(ctx, args, blockSelector, 0, overrides)
 	if err != nil {
 		return nil, err
 	}
@@ -550,6 +543,9 @@ func (api *ethAPI) executeCallWithTracer(ctx context.Context, args callArgs, sel
 }
 
 func (api *ethAPI) executeCallAt(ctx context.Context, args callArgs, header *types.Header, state *state.StateDB, gasOverride uint64, overrides *stateOverride, hooks *tracing.Hooks) (*core.ExecutionResult, error) {
+	if err := args.validateData(); err != nil {
+		return nil, &invalidParamsError{message: err.Error()}
+	}
 	state = state.Copy()
 	if overrides != nil {
 		for address, account := range *overrides {
@@ -557,7 +553,11 @@ func (api *ethAPI) executeCallAt(ctx context.Context, args callArgs, header *typ
 				return nil, errors.New("state and stateDiff cannot be used together")
 			}
 			if account.Balance != nil {
-				state.SetBalance(address, uint256.MustFromBig((*big.Int)(account.Balance)), tracing.BalanceChangeUnspecified)
+				balance, err := checkedU256("balance", (*big.Int)(account.Balance))
+				if err != nil {
+					return nil, &invalidParamsError{message: err.Error()}
+				}
+				state.SetBalance(address, balance, tracing.BalanceChangeUnspecified)
 			}
 			if account.Nonce != nil {
 				state.SetNonce(address, uint64(*account.Nonce), tracing.NonceChangeUnspecified)
@@ -590,16 +590,23 @@ func (api *ethAPI) executeCallAt(ctx context.Context, args callArgs, header *typ
 	if args.Value != nil {
 		value = (*big.Int)(args.Value)
 	}
-	feeCap, tipCap := new(big.Int), new(big.Int)
+	gasPrice, feeCap, tipCap := new(big.Int), new(big.Int), new(big.Int)
 	if args.GasPrice != nil {
-		feeCap.Set((*big.Int)(args.GasPrice))
-		tipCap.Set((*big.Int)(args.GasPrice))
+		gasPrice.Set((*big.Int)(args.GasPrice))
+		feeCap.Set(gasPrice)
+		tipCap.Set(gasPrice)
 	} else {
 		if args.MaxFeePerGas != nil {
 			feeCap.Set((*big.Int)(args.MaxFeePerGas))
 		}
 		if args.MaxPriorityFeePerGas != nil {
 			tipCap.Set((*big.Int)(args.MaxPriorityFeePerGas))
+		}
+		if header.BaseFee != nil && (feeCap.Sign() != 0 || tipCap.Sign() != 0) {
+			gasPrice.Add(header.BaseFee, tipCap)
+			if gasPrice.Cmp(feeCap) > 0 {
+				gasPrice.Set(feeCap)
+			}
 		}
 	}
 	data := []byte(nil)
@@ -612,11 +619,41 @@ func (api *ethAPI) executeCallAt(ctx context.Context, args callArgs, header *typ
 	if args.AccessList != nil {
 		accessList = *args.AccessList
 	}
+	nonce := uint64(0)
+	if args.Nonce != nil {
+		nonce = uint64(*args.Nonce)
+	}
+	blobFeeCap := new(big.Int)
+	if args.BlobFeeCap != nil {
+		blobFeeCap.Set((*big.Int)(args.BlobFeeCap))
+	}
+	valueU256, err := checkedU256("value", value)
+	if err != nil {
+		return nil, &invalidParamsError{message: err.Error()}
+	}
+	gasPriceU256, err := checkedU256("gas price", gasPrice)
+	if err != nil {
+		return nil, &invalidParamsError{message: err.Error()}
+	}
+	feeCapU256, err := checkedU256("gas fee cap", feeCap)
+	if err != nil {
+		return nil, &invalidParamsError{message: err.Error()}
+	}
+	tipCapU256, err := checkedU256("priority fee", tipCap)
+	if err != nil {
+		return nil, &invalidParamsError{message: err.Error()}
+	}
+	blobFeeCapU256, err := checkedU256("blob fee cap", blobFeeCap)
+	if err != nil {
+		return nil, &invalidParamsError{message: err.Error()}
+	}
 	message := &core.Message{
-		From: from, To: args.To, Value: uint256.MustFromBig(value), GasLimit: gas,
-		GasPrice: uint256.MustFromBig(feeCap), GasFeeCap: uint256.MustFromBig(feeCap),
-		GasTipCap: uint256.MustFromBig(tipCap), Data: data, AccessList: accessList,
-		SkipNonceChecks: true, SkipTransactionChecks: true,
+		From: from, To: args.To, Nonce: nonce, Value: valueU256, GasLimit: gas,
+		GasPrice: gasPriceU256, GasFeeCap: feeCapU256,
+		GasTipCap: tipCapU256, Data: data, AccessList: accessList,
+		BlobGasFeeCap: blobFeeCapU256, BlobHashes: args.BlobHashes,
+		SetCodeAuthorizations: args.AuthorizationList,
+		SkipNonceChecks:       true, SkipTransactionChecks: true,
 	}
 	blockContext := core.NewEVMBlockContext(header, api.node.chain.blockchain, nil)
 	evm := vm.NewEVM(blockContext, state, api.node.chain.config, vm.Config{NoBaseFee: true, Tracer: hooks})
@@ -750,7 +787,23 @@ func (api *ethAPI) GetBlockByNumber(_ context.Context, number rpc.BlockNumber, f
 	if err != nil || block == nil {
 		return nil, err
 	}
-	return marshalBlock(block, full, api.node.chain.config), nil
+	result := marshalBlock(block, full, api.node.chain.config)
+	if number == rpc.PendingBlockNumber {
+		for _, field := range []string{"hash", "nonce", "miner"} {
+			result[field] = nil
+		}
+		if full {
+			transactions := block.Transactions()
+			items := make([]*rpcTransaction, len(transactions))
+			for index := range transactions {
+				items[index] = newRPCTransaction(
+					transactions[index], common.Hash{}, block.NumberU64(), block.Time(), uint64(index), nil, api.node.chain.config,
+				)
+			}
+			result["transactions"] = items
+		}
+	}
+	return result, nil
 }
 
 func (api *ethAPI) GetBlockByHash(_ context.Context, hash common.Hash, full bool) map[string]any {
@@ -770,15 +823,12 @@ func (api *ethAPI) GetTransactionByHash(_ context.Context, hash common.Hash) *rp
 		}
 		return newRPCTransaction(tx, blockHash, blockNumber, block.Time(), index, block.BaseFee(), api.node.chain.config)
 	}
-	api.node.chain.mu.RLock()
-	defer api.node.chain.mu.RUnlock()
-	for _, transactions := range api.node.chain.pending {
-		for _, pending := range transactions {
-			if pending.Hash() == hash {
-				head := api.node.chain.blockchain.CurrentBlock()
-				return newRPCTransaction(pending, common.Hash{}, head.Number.Uint64(), head.Time, 0, nil, api.node.chain.config)
-			}
+	if pending := api.node.chain.poolTransaction(hash); pending != nil {
+		head := api.node.chain.blockchain.CurrentBlock()
+		if block := api.node.chain.pendingBlock(); block != nil {
+			head = block.Header()
 		}
+		return newRPCTransaction(pending, common.Hash{}, head.Number.Uint64(), head.Time, 0, nil, api.node.chain.config)
 	}
 	return nil
 }
@@ -806,47 +856,136 @@ func (api *ethAPI) GetLogs(_ context.Context, criteria filters.FilterCriteria) (
 func (api *ethAPI) NewFilter(criteria filters.FilterCriteria) rpc.ID {
 	api.filterMu.Lock()
 	defer api.filterMu.Unlock()
+	api.ensureFiltersLocked()
 	id := rpc.NewID()
-	from := uint64(0)
-	if criteria.FromBlock != nil && criteria.FromBlock.Sign() >= 0 {
-		from = criteria.FromBlock.Uint64()
-	}
-	api.logFilters[id] = &installedLogFilter{criteria: criteria, nextBlock: from}
+	api.filters[id] = &installedFilter{kind: installedLogFilter, criteria: criteria, revision: api.node.Revision()}
 	return id
+}
+
+func (api *ethAPI) NewBlockFilter() rpc.ID {
+	api.filterMu.Lock()
+	defer api.filterMu.Unlock()
+	api.ensureFiltersLocked()
+	id := rpc.NewID()
+	api.filters[id] = &installedFilter{kind: installedBlockFilter, revision: api.node.Revision()}
+	return id
+}
+
+func (api *ethAPI) NewPendingTransactionFilter() rpc.ID {
+	api.filterMu.Lock()
+	defer api.filterMu.Unlock()
+	api.ensureFiltersLocked()
+	id := rpc.NewID()
+	api.filters[id] = &installedFilter{
+		kind: installedPendingTransactionFilter, pendingSeq: api.node.pendingEvents.current(),
+	}
+	return id
+}
+
+func (api *ethAPI) ensureFiltersLocked() {
+	if api.filters == nil {
+		api.filters = make(map[rpc.ID]*installedFilter)
+	}
 }
 
 func (api *ethAPI) GetFilterLogs(id rpc.ID) ([]*types.Log, error) {
 	api.filterMu.Lock()
-	filter := api.logFilters[id]
+	filter := api.filters[id]
 	api.filterMu.Unlock()
 	if filter == nil {
 		return nil, errors.New("filter not found")
+	}
+	if filter.kind != installedLogFilter {
+		return nil, errors.New("filter is not a log filter")
 	}
 	return api.logs(filter.criteria, nil)
 }
 
-func (api *ethAPI) GetFilterChanges(id rpc.ID) ([]*types.Log, error) {
+func (api *ethAPI) GetFilterChanges(id rpc.ID) (any, error) {
 	api.filterMu.Lock()
-	filter := api.logFilters[id]
+	defer api.filterMu.Unlock()
+	filter := api.filters[id]
 	if filter == nil {
-		api.filterMu.Unlock()
 		return nil, errors.New("filter not found")
 	}
-	from := filter.nextBlock
-	head := api.node.chain.blockchain.CurrentBlock().Number.Uint64()
-	filter.nextBlock = head + 1
-	criteria := filter.criteria
-	api.filterMu.Unlock()
-	return api.logs(criteria, &from)
+	if filter.kind == installedPendingTransactionFilter {
+		events, err := api.node.pendingEvents.since(filter.pendingSeq)
+		if errors.Is(err, ErrEventGap) {
+			filter.pendingSeq = api.node.pendingEvents.current()
+			return nil, &invalidInputError{message: "pending transaction filter history is no longer available"}
+		}
+		if err != nil {
+			return nil, err
+		}
+		result := make([]common.Hash, 0, len(events))
+		for _, event := range events {
+			filter.pendingSeq = event.Sequence
+			result = append(result, event.Hash)
+		}
+		return result, nil
+	}
+	events, err := api.node.EventsSince(filter.revision)
+	if errors.Is(err, ErrEventGap) {
+		filter.revision = api.node.Revision()
+		return nil, &invalidInputError{message: "filter history is no longer available"}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if filter.kind == installedBlockFilter {
+		result := make([]common.Hash, 0, len(events))
+		for _, event := range events {
+			filter.revision = event.Revision
+			if isBlockRevisionEvent(event) && !event.Removed {
+				result = append(result, event.BlockHash)
+			}
+		}
+		return result, nil
+	}
+	result := make([]*types.Log, 0)
+	query := ethereum.FilterQuery(filter.criteria)
+	for _, event := range events {
+		filter.revision = event.Revision
+		if !isBlockRevisionEvent(event) || !filterIncludesBlock(query, event) {
+			continue
+		}
+		block := api.node.chain.blockchain.GetBlockByHash(event.BlockHash)
+		if block == nil {
+			continue
+		}
+		for _, entry := range filterBlockLogs(api.node.chain.blockchain.GetReceiptsByHash(block.Hash()), query) {
+			copy := *entry
+			copy.Removed = event.Removed
+			result = append(result, &copy)
+		}
+	}
+	return result, nil
 }
 
 func (api *ethAPI) UninstallFilter(id rpc.ID) bool {
 	api.filterMu.Lock()
 	defer api.filterMu.Unlock()
-	if api.logFilters[id] == nil {
+	if api.filters[id] == nil {
 		return false
 	}
-	delete(api.logFilters, id)
+	delete(api.filters, id)
+	return true
+}
+
+func isBlockRevisionEvent(event Event) bool {
+	return event.Type == "block" || event.Type == "control_block"
+}
+
+func filterIncludesBlock(query ethereum.FilterQuery, event Event) bool {
+	if query.BlockHash != nil {
+		return *query.BlockHash == event.BlockHash
+	}
+	if query.FromBlock != nil && query.FromBlock.Sign() >= 0 && event.BlockNumber < query.FromBlock.Uint64() {
+		return false
+	}
+	if query.ToBlock != nil && query.ToBlock.Sign() >= 0 && event.BlockNumber > query.ToBlock.Uint64() {
+		return false
+	}
 	return true
 }
 
@@ -874,7 +1013,7 @@ func (api *ethAPI) NewHeads(ctx context.Context) (*rpc.Subscription, error) {
 				}
 				for _, event := range events {
 					revision = event.Revision
-					if event.Type != "block" || event.Removed {
+					if !isBlockRevisionEvent(event) || event.Removed {
 						continue
 					}
 					block := api.node.chain.blockchain.GetBlockByHash(event.BlockHash)
@@ -990,25 +1129,50 @@ func (api *txpoolAPI) Content() map[string]any {
 	defer api.node.chain.mu.RUnlock()
 	pending := make(map[string]map[string]any)
 	queued := make(map[string]map[string]any)
-	view := api.node.chain.pendingView
 	for address, transactions := range api.node.chain.pending {
 		for nonce, transaction := range transactions {
-			target := queued
-			if view != nil {
-				if _, executable := view.executable[transaction.Hash()]; executable {
-					target = pending
-				}
-			}
+			target := api.poolTarget(transaction, pending, queued)
 			if target[address.Hex()] == nil {
 				target[address.Hex()] = make(map[string]any)
 			}
-			head := api.node.chain.blockchain.CurrentBlock()
-			target[address.Hex()][hexutil.EncodeUint64(nonce)] = newRPCTransaction(
-				transaction, common.Hash{}, head.Number.Uint64(), head.Time, 0, nil, api.node.chain.config,
-			)
+			target[address.Hex()][strconv.FormatUint(nonce, 10)] = api.poolRPCTransaction(transaction)
 		}
 	}
 	return map[string]any{"pending": pending, "queued": queued}
+}
+
+func (api *txpoolAPI) ContentFrom(address common.Address) map[string]map[string]any {
+	api.node.chain.mu.RLock()
+	defer api.node.chain.mu.RUnlock()
+	pending := make(map[string]any)
+	queued := make(map[string]any)
+	for nonce, transaction := range api.node.chain.pending[address] {
+		target := queued
+		if api.node.chain.pendingView != nil {
+			if _, executable := api.node.chain.pendingView.executable[transaction.Hash()]; executable {
+				target = pending
+			}
+		}
+		target[strconv.FormatUint(nonce, 10)] = api.poolRPCTransaction(transaction)
+	}
+	return map[string]map[string]any{"pending": pending, "queued": queued}
+}
+
+func (api *txpoolAPI) poolTarget(transaction *types.Transaction, pending, queued map[string]map[string]any) map[string]map[string]any {
+	if api.node.chain.pendingView != nil {
+		if _, executable := api.node.chain.pendingView.executable[transaction.Hash()]; executable {
+			return pending
+		}
+	}
+	return queued
+}
+
+func (api *txpoolAPI) poolRPCTransaction(transaction *types.Transaction) *rpcTransaction {
+	head := api.node.chain.blockchain.CurrentBlock()
+	if api.node.chain.pendingView != nil && api.node.chain.pendingView.block != nil {
+		head = api.node.chain.pendingView.block.Header()
+	}
+	return newRPCTransaction(transaction, common.Hash{}, head.Number.Uint64(), head.Time, 0, nil, api.node.chain.config)
 }
 
 func (api *txpoolAPI) poolCounts() (pending, queued int) {
@@ -1073,7 +1237,7 @@ func (api *personalAPI) UnlockAccount(address common.Address, _ string, _ *hexut
 
 func (api *personalAPI) SendTransaction(ctx context.Context, args callArgs, _ string) (common.Hash, error) {
 	service := &ethAPI{node: api.node}
-	transaction, err := service.signTransaction(ctx, args)
+	transaction, err := service.buildAndSignTransaction(ctx, args, false)
 	if err != nil {
 		return common.Hash{}, err
 	}
@@ -1202,7 +1366,10 @@ func (n *Node) resolveHeader(selector rpc.BlockNumberOrHash) (*types.Header, err
 	}
 	block, err := n.blockByNumber(number)
 	if err != nil || block == nil {
-		return nil, err
+		if err != nil {
+			return nil, err
+		}
+		return nil, &resourceNotFoundError{message: "header not found"}
 	}
 	return block.Header(), nil
 }

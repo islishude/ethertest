@@ -224,12 +224,36 @@ func (c *executionChain) addTransaction(tx *types.Transaction) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	head := c.blockchain.CurrentBlock()
-	signer := types.MakeSigner(c.config, head.Number, head.Time)
+	validationHeader := head
+	if c.pendingView != nil && c.pendingView.block != nil {
+		validationHeader = c.pendingView.block.Header()
+	}
+	signer := types.MakeSigner(c.config, validationHeader.Number, validationHeader.Time)
+	validationTx := tx
+	if sidecar := tx.BlobTxSidecar(); sidecar != nil {
+		expectedVersion := types.BlobSidecarVersion0
+		if c.config.IsOsaka(validationHeader.Number, validationHeader.Time) {
+			expectedVersion = types.BlobSidecarVersion1
+		}
+		if sidecar.Version != expectedVersion {
+			return fmt.Errorf("%w: unexpected sidecar version, want: %d, got: %d", txpool.ErrSidecarFormatError, expectedVersion, sidecar.Version)
+		}
+		// geth's public txpool validator consumes the cell-proof form even on
+		// pre-Osaka heads. Validate a converted copy, then verify and retain the
+		// original fork-appropriate sidecar below.
+		if sidecar.Version == types.BlobSidecarVersion0 {
+			converted := sidecar.Copy()
+			if err := converted.ToV1(); err != nil {
+				return fmt.Errorf("%w: convert blob sidecar: %v", txpool.ErrKZGVerificationError, err)
+			}
+			validationTx = tx.WithBlobTxSidecar(converted)
+		}
+	}
 	opts := &txpool.ValidationOptions{
 		Config: c.config, Accept: 0xff, MaxSize: 4 << 20,
 		MaxBlobCount: params.BlobTxMaxBlobs, MinTip: new(big.Int),
 	}
-	if err := txpool.ValidateTransaction(tx, head, signer, opts); err != nil {
+	if err := txpool.ValidateTransaction(validationTx, validationHeader, signer, opts); err != nil {
 		return err
 	}
 	from, _ := types.Sender(signer, tx)
@@ -247,7 +271,7 @@ func (c *executionChain) addTransaction(tx *types.Transaction) error {
 			return errors.New("replacement transaction underpriced")
 		}
 	}
-	if err := txpool.ValidateTransactionWithState(tx, signer, &txpool.ValidationOptionsWithState{
+	if err := txpool.ValidateTransactionWithState(validationTx, signer, &txpool.ValidationOptionsWithState{
 		State: state,
 		ExistingExpenditure: func(address common.Address) *big.Int {
 			total := new(big.Int)
@@ -267,8 +291,22 @@ func (c *executionChain) addTransaction(tx *types.Transaction) error {
 	}
 	var encodedSidecar []byte
 	if sidecar := tx.BlobTxSidecar(); sidecar != nil {
-		if err := kzg4844.VerifyCellProofs(sidecar.Blobs, sidecar.Commitments, sidecar.Proofs); err != nil {
-			return fmt.Errorf("%w: %v", txpool.ErrKZGVerificationError, err)
+		switch sidecar.Version {
+		case types.BlobSidecarVersion0:
+			if len(sidecar.Blobs) != len(sidecar.Commitments) || len(sidecar.Blobs) != len(sidecar.Proofs) {
+				return fmt.Errorf("%w: malformed version 0 sidecar", txpool.ErrKZGVerificationError)
+			}
+			for index := range sidecar.Blobs {
+				if err := kzg4844.VerifyBlobProof(&sidecar.Blobs[index], sidecar.Commitments[index], sidecar.Proofs[index]); err != nil {
+					return fmt.Errorf("%w: %v", txpool.ErrKZGVerificationError, err)
+				}
+			}
+		case types.BlobSidecarVersion1:
+			if err := kzg4844.VerifyCellProofs(sidecar.Blobs, sidecar.Commitments, sidecar.Proofs); err != nil {
+				return fmt.Errorf("%w: %v", txpool.ErrKZGVerificationError, err)
+			}
+		default:
+			return fmt.Errorf("%w: unsupported sidecar version %d", txpool.ErrKZGVerificationError, sidecar.Version)
 		}
 		encodedSidecar, err = rlp.EncodeToBytes(sidecar)
 		if err != nil {

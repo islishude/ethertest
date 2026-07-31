@@ -86,6 +86,42 @@ The network surface currently includes:
 - Offline locked EIP-4788 wraparound, KZG proof, and SSZ container regression
   vectors; their source revisions and digests are recorded in `spec.lock`.
 
+### Execution APIs v1.0.0-beta.7
+
+The standard RPC registration baseline is
+[`ethereum/execution-apis@v1.0.0-beta.7`](https://github.com/ethereum/execution-apis/tree/v1.0.0-beta.7),
+commit `5aebdfdd45cadeb723be4bd45b4611b71c8b1c85`. The locked offline
+classification in `specs/upstream/execution-rpc-subset.json` contains all 78
+methods: 49 are implemented and 29 are deliberately unregistered. Existing
+`web3`, `personal`, `miner`, subscription, and `ethertest`/`anvil`/`evm`
+extensions remain available but are not counted in that baseline.
+
+| Surface | Status |
+| --- | --- |
+| `eth` block, transaction, receipt, state, fee, filter, signing, config, capabilities, and `eth_simulateV1` methods | 41 implemented |
+| `debug_getRawHeader`, `debug_getRawBlock`, `debug_getRawReceipts`, `debug_getRawTransaction` | 4 implemented |
+| `net_version`, `txpool_status`, `txpool_content`, `txpool_contentFrom` | 4 implemented |
+| All 25 `engine_*` methods | Excluded until ethertest has a real authenticated EL/CL Engine API boundary |
+| `debug_getBadBlocks`, `testing_buildBlockV1` | Excluded because v0.1 has no truthful sync bad-block pipeline or public upstream testing service |
+| `eth_getBlockAccessList`, `debug_getRawBlockAccessList` | Excluded until Amsterdam/EIP-7928 is supported |
+
+`safe` and `finalized` continue to be synthetic slot-derived tags. Built-in
+development accounts are the only accounts accepted by `eth_sign`,
+`eth_signTransaction`, and `eth_sendTransaction`; signatures and errors never
+expose their keys or mnemonic. Pending blocks and transactions encode
+unconfirmed inclusion fields as `null`. Polling filters and pending-transaction
+history are bounded in-memory state and are not restored after restart.
+`eth_capabilities` reports the actual archive/state window while block,
+transaction, log, and receipt history starts at genesis.
+
+`eth_simulateV1` is read-only and uses sequential state across simulated
+blocks. It supports block/state overrides, moved precompiles, gap-filled empty
+blocks, optional validation, full transaction results, and synthetic ETH
+transfer logs; omitted timestamps advance by the configured network slot
+duration. Its fixed v0.1 limits are 256 output blocks, 5,000 calls per
+block, 10,000 calls per request, 50,000,000 cumulative gas, and a five-second
+EVM timeout. Limit exhaustion returns `-38026`; timeout returns `-32016`.
+
 This is a synthetic Beacon projection, not a consensus client: it does not
 implement BeaconState transitions, Casper FFG, fork choice, P2P, the Engine API,
 or standard CL block import.
