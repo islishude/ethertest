@@ -28,17 +28,36 @@ import (
 	"github.com/ethereum/go-ethereum/eth/tracers/logger"
 	_ "github.com/ethereum/go-ethereum/eth/tracers/native"
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/holiman/uint256"
 )
 
 const Version = "0.1.0-alpha.1"
 
+const (
+	txSyncDefaultTimeout = 20 * time.Second
+	txSyncMaxTimeout     = time.Minute
+)
+
 type ethAPI struct {
 	node       *Node
 	filterMu   sync.Mutex
 	logFilters map[rpc.ID]*installedLogFilter
 }
+
+type txSyncTimeoutError struct {
+	timeout time.Duration
+	hash    common.Hash
+}
+
+func (err *txSyncTimeoutError) Error() string {
+	return fmt.Sprintf("The transaction was added to the transaction pool but wasn't processed in %v", err.timeout)
+}
+
+func (err *txSyncTimeoutError) ErrorCode() int         { return 4 }
+func (err *txSyncTimeoutError) ErrorData() interface{} { return err.hash.Hex() }
+
 type installedLogFilter struct {
 	criteria  filters.FilterCriteria
 	nextBlock uint64
@@ -79,6 +98,36 @@ type callArgs struct {
 	Data                 *hexutil.Bytes    `json:"data"`
 	Input                *hexutil.Bytes    `json:"input"`
 	AccessList           *types.AccessList `json:"accessList"`
+}
+
+// rpcTransaction mirrors geth's internal/ethapi.RPCTransaction. Keeping a
+// dedicated wire type avoids exposing geth internals while preserving the
+// standard transaction fields expected by RPC clients.
+type rpcTransaction struct {
+	BlockHash           *common.Hash                 `json:"blockHash"`
+	BlockNumber         *hexutil.Big                 `json:"blockNumber"`
+	BlockTimestamp      *hexutil.Uint64              `json:"blockTimestamp"`
+	From                common.Address               `json:"from"`
+	Gas                 hexutil.Uint64               `json:"gas"`
+	GasPrice            *hexutil.Big                 `json:"gasPrice"`
+	GasFeeCap           *hexutil.Big                 `json:"maxFeePerGas,omitempty"`
+	GasTipCap           *hexutil.Big                 `json:"maxPriorityFeePerGas,omitempty"`
+	MaxFeePerBlobGas    *hexutil.Big                 `json:"maxFeePerBlobGas,omitempty"`
+	Hash                common.Hash                  `json:"hash"`
+	Input               hexutil.Bytes                `json:"input"`
+	Nonce               hexutil.Uint64               `json:"nonce"`
+	To                  *common.Address              `json:"to"`
+	TransactionIndex    *hexutil.Uint64              `json:"transactionIndex"`
+	Value               *hexutil.Big                 `json:"value"`
+	Type                hexutil.Uint64               `json:"type"`
+	Accesses            *types.AccessList            `json:"accessList,omitempty"`
+	ChainID             *hexutil.Big                 `json:"chainId,omitempty"`
+	BlobVersionedHashes []common.Hash                `json:"blobVersionedHashes,omitempty"`
+	AuthorizationList   []types.SetCodeAuthorization `json:"authorizationList,omitempty"`
+	V                   *hexutil.Big                 `json:"v"`
+	R                   *hexutil.Big                 `json:"r"`
+	S                   *hexutil.Big                 `json:"s"`
+	YParity             *hexutil.Uint64              `json:"yParity,omitempty"`
 }
 
 type overrideAccount struct {
@@ -319,6 +368,67 @@ func (api *ethAPI) SendRawTransaction(ctx context.Context, raw hexutil.Bytes) (c
 		return common.Hash{}, err
 	}
 	return api.node.SendTransaction(ctx, &tx)
+}
+
+func (api *ethAPI) SendRawTransactionSync(ctx context.Context, raw hexutil.Bytes, timeoutMilliseconds *uint64) (map[string]any, error) {
+	var tx types.Transaction
+	if err := tx.UnmarshalBinary(raw); err != nil {
+		return nil, err
+	}
+
+	revision := api.node.Revision()
+	hash, err := api.node.SendTransaction(ctx, &tx)
+	if err != nil {
+		return nil, err
+	}
+	if receipt, err := api.transactionReceipt(hash); err != nil || receipt != nil {
+		return receipt, err
+	}
+
+	timeout := txSyncDefaultTimeout
+	if timeoutMilliseconds != nil && *timeoutMilliseconds > 0 {
+		maxMilliseconds := uint64(txSyncMaxTimeout / time.Millisecond)
+		if *timeoutMilliseconds >= maxMilliseconds {
+			timeout = txSyncMaxTimeout
+		} else {
+			timeout = time.Duration(*timeoutMilliseconds) * time.Millisecond
+		}
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	for {
+		events, changed, err := api.node.events.sinceAndWait(revision)
+		if errors.Is(err, ErrEventGap) {
+			revision = api.node.Revision()
+			if receipt, receiptErr := api.transactionReceipt(hash); receiptErr != nil || receipt != nil {
+				return receipt, receiptErr
+			}
+		} else if err != nil {
+			return nil, err
+		} else {
+			for _, event := range events {
+				revision = event.Revision
+				if event.Type != "block" || event.Removed {
+					continue
+				}
+				if receipt, err := api.transactionReceipt(hash); err != nil || receipt != nil {
+					return receipt, err
+				}
+			}
+		}
+
+		select {
+		case <-waitCtx.Done():
+			if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+				return nil, &txSyncTimeoutError{timeout: timeout, hash: hash}
+			}
+			return nil, waitCtx.Err()
+		case <-changed:
+		case <-api.node.stopping:
+			return nil, ErrNodeStopped
+		}
+	}
 }
 
 func (api *ethAPI) SendTransaction(ctx context.Context, args callArgs) (common.Hash, error) {
@@ -646,7 +756,7 @@ func (api *ethAPI) GetBlockByNumber(_ context.Context, number rpc.BlockNumber, f
 	if err != nil || block == nil {
 		return nil, err
 	}
-	return marshalBlock(block, full), nil
+	return marshalBlock(block, full, api.node.chain.config), nil
 }
 
 func (api *ethAPI) GetBlockByHash(_ context.Context, hash common.Hash, full bool) map[string]any {
@@ -654,20 +764,45 @@ func (api *ethAPI) GetBlockByHash(_ context.Context, hash common.Hash, full bool
 	if block == nil {
 		return nil
 	}
-	return marshalBlock(block, full)
+	return marshalBlock(block, full, api.node.chain.config)
 }
 
-func (api *ethAPI) GetTransactionByHash(_ context.Context, hash common.Hash) map[string]any {
+func (api *ethAPI) GetTransactionByHash(_ context.Context, hash common.Hash) *rpcTransaction {
+	tx, blockHash, blockNumber, index := rawdb.ReadCanonicalTransaction(api.node.chain.db, hash)
+	if tx != nil {
+		block := api.node.chain.blockchain.GetBlockByHash(blockHash)
+		if block == nil {
+			return nil
+		}
+		return newRPCTransaction(tx, blockHash, blockNumber, block.Time(), index, block.BaseFee(), api.node.chain.config)
+	}
+	api.node.chain.mu.RLock()
+	defer api.node.chain.mu.RUnlock()
+	for _, transactions := range api.node.chain.pending {
+		for _, pending := range transactions {
+			if pending.Hash() == hash {
+				head := api.node.chain.blockchain.CurrentBlock()
+				return newRPCTransaction(pending, common.Hash{}, head.Number.Uint64(), head.Time, 0, nil, api.node.chain.config)
+			}
+		}
+	}
+	return nil
+}
+
+func (api *ethAPI) GetTransactionReceipt(_ context.Context, hash common.Hash) (map[string]any, error) {
+	return api.transactionReceipt(hash)
+}
+
+func (api *ethAPI) transactionReceipt(hash common.Hash) (map[string]any, error) {
 	tx, blockHash, blockNumber, index := rawdb.ReadCanonicalTransaction(api.node.chain.db, hash)
 	if tx == nil {
-		return nil
+		return nil, nil
 	}
-	return marshalTransaction(tx, &blockHash, &blockNumber, &index)
-}
-
-func (api *ethAPI) GetTransactionReceipt(_ context.Context, hash common.Hash) *types.Receipt {
 	receipt, _, _, _ := rawdb.ReadCanonicalReceipt(api.node.chain.db, hash, api.node.chain.config)
-	return receipt
+	if receipt == nil {
+		return nil, nil
+	}
+	return marshalReceipt(receipt, tx, blockHash, blockNumber, index), nil
 }
 
 func (api *ethAPI) GetLogs(_ context.Context, criteria filters.FilterCriteria) ([]*types.Log, error) {
@@ -859,8 +994,8 @@ func (api *txpoolAPI) Status() map[string]hexutil.Uint {
 func (api *txpoolAPI) Content() map[string]any {
 	api.node.chain.mu.RLock()
 	defer api.node.chain.mu.RUnlock()
-	pending := make(map[string]map[string]map[string]any)
-	queued := make(map[string]map[string]map[string]any)
+	pending := make(map[string]map[string]any)
+	queued := make(map[string]map[string]any)
 	state, _ := api.node.chain.blockchain.State()
 	for address, transactions := range api.node.chain.pending {
 		frontier := state.GetNonce(address)
@@ -873,9 +1008,12 @@ func (api *txpoolAPI) Content() map[string]any {
 				target = pending
 			}
 			if target[address.Hex()] == nil {
-				target[address.Hex()] = make(map[string]map[string]any)
+				target[address.Hex()] = make(map[string]any)
 			}
-			target[address.Hex()][hexutil.EncodeUint64(nonce)] = marshalTransaction(transaction, nil, nil, nil)
+			head := api.node.chain.blockchain.CurrentBlock()
+			target[address.Hex()][hexutil.EncodeUint64(nonce)] = newRPCTransaction(
+				transaction, common.Hash{}, head.Number.Uint64(), head.Time, 0, nil, api.node.chain.config,
+			)
 		}
 	}
 	return map[string]any{"pending": pending, "queued": queued}
@@ -1081,7 +1219,7 @@ func (n *Node) blockByNumber(number rpc.BlockNumber) (*types.Block, error) {
 	}
 }
 
-func marshalBlock(block *types.Block, full bool) map[string]any {
+func marshalBlock(block *types.Block, full bool, config *params.ChainConfig) map[string]any {
 	headerJSON, _ := headerMap(block.Header())
 	result := headerJSON
 	result["size"] = hexutil.Uint64(block.Size())
@@ -1089,10 +1227,11 @@ func marshalBlock(block *types.Block, full bool) map[string]any {
 	result["withdrawals"] = block.Withdrawals()
 	txs := block.Transactions()
 	if full {
-		items := make([]map[string]any, len(txs))
+		items := make([]*rpcTransaction, len(txs))
 		for i, tx := range txs {
-			hash, number, index := block.Hash(), block.NumberU64(), uint64(i)
-			items[i] = marshalTransaction(tx, &hash, &number, &index)
+			items[i] = newRPCTransaction(
+				tx, block.Hash(), block.NumberU64(), block.Time(), uint64(i), block.BaseFee(), config,
+			)
 		}
 		result["transactions"] = items
 	} else {
@@ -1115,14 +1254,137 @@ func headerMap(header *types.Header) (map[string]any, error) {
 	return result, err
 }
 
-func marshalTransaction(tx *types.Transaction, blockHash *common.Hash, blockNumber, index *uint64) map[string]any {
-	data, _ := tx.MarshalJSON()
-	var result map[string]any
-	_ = json.Unmarshal(data, &result)
-	if blockHash != nil {
-		result["blockHash"] = blockHash
-		result["blockNumber"] = hexutil.Uint64(*blockNumber)
-		result["transactionIndex"] = hexutil.Uint64(*index)
+func newRPCTransaction(
+	tx *types.Transaction,
+	blockHash common.Hash,
+	blockNumber uint64,
+	blockTime uint64,
+	index uint64,
+	baseFee *big.Int,
+	config *params.ChainConfig,
+) *rpcTransaction {
+	signer := types.MakeSigner(config, new(big.Int).SetUint64(blockNumber), blockTime)
+	from, _ := types.Sender(signer, tx)
+	v, r, s := tx.RawSignatureValues()
+	result := &rpcTransaction{
+		Type:     hexutil.Uint64(tx.Type()),
+		From:     from,
+		Gas:      hexutil.Uint64(tx.Gas()),
+		GasPrice: (*hexutil.Big)(tx.GasPrice()),
+		Hash:     tx.Hash(),
+		Input:    hexutil.Bytes(tx.Data()),
+		Nonce:    hexutil.Uint64(tx.Nonce()),
+		To:       tx.To(),
+		Value:    (*hexutil.Big)(tx.Value()),
+		V:        (*hexutil.Big)(v),
+		R:        (*hexutil.Big)(r),
+		S:        (*hexutil.Big)(s),
+	}
+	if blockHash != (common.Hash{}) {
+		result.BlockHash = &blockHash
+		result.BlockNumber = (*hexutil.Big)(new(big.Int).SetUint64(blockNumber))
+		result.BlockTimestamp = (*hexutil.Uint64)(&blockTime)
+		result.TransactionIndex = (*hexutil.Uint64)(&index)
+	}
+
+	switch tx.Type() {
+	case types.LegacyTxType:
+		if chainID := tx.ChainId(); chainID.Sign() != 0 {
+			result.ChainID = (*hexutil.Big)(chainID)
+		}
+	case types.AccessListTxType:
+		accessList := tx.AccessList()
+		yParity := hexutil.Uint64(v.Sign())
+		result.Accesses = &accessList
+		result.ChainID = (*hexutil.Big)(tx.ChainId())
+		result.YParity = &yParity
+	case types.DynamicFeeTxType:
+		accessList := tx.AccessList()
+		yParity := hexutil.Uint64(v.Sign())
+		result.Accesses = &accessList
+		result.ChainID = (*hexutil.Big)(tx.ChainId())
+		result.YParity = &yParity
+		result.GasFeeCap = (*hexutil.Big)(tx.GasFeeCap())
+		result.GasTipCap = (*hexutil.Big)(tx.GasTipCap())
+		if baseFee != nil && blockHash != (common.Hash{}) {
+			result.GasPrice = (*hexutil.Big)(effectiveGasPrice(tx, baseFee))
+		} else {
+			result.GasPrice = (*hexutil.Big)(tx.GasFeeCap())
+		}
+	case types.BlobTxType:
+		accessList := tx.AccessList()
+		yParity := hexutil.Uint64(v.Sign())
+		result.Accesses = &accessList
+		result.ChainID = (*hexutil.Big)(tx.ChainId())
+		result.YParity = &yParity
+		result.GasFeeCap = (*hexutil.Big)(tx.GasFeeCap())
+		result.GasTipCap = (*hexutil.Big)(tx.GasTipCap())
+		if baseFee != nil && blockHash != (common.Hash{}) {
+			result.GasPrice = (*hexutil.Big)(effectiveGasPrice(tx, baseFee))
+		} else {
+			result.GasPrice = (*hexutil.Big)(tx.GasFeeCap())
+		}
+		result.MaxFeePerBlobGas = (*hexutil.Big)(tx.BlobGasFeeCap())
+		result.BlobVersionedHashes = tx.BlobHashes()
+	case types.SetCodeTxType:
+		accessList := tx.AccessList()
+		yParity := hexutil.Uint64(v.Sign())
+		result.Accesses = &accessList
+		result.ChainID = (*hexutil.Big)(tx.ChainId())
+		result.YParity = &yParity
+		result.GasFeeCap = (*hexutil.Big)(tx.GasFeeCap())
+		result.GasTipCap = (*hexutil.Big)(tx.GasTipCap())
+		if baseFee != nil && blockHash != (common.Hash{}) {
+			result.GasPrice = (*hexutil.Big)(effectiveGasPrice(tx, baseFee))
+		} else {
+			result.GasPrice = (*hexutil.Big)(tx.GasFeeCap())
+		}
+		result.AuthorizationList = tx.SetCodeAuthorizations()
+	}
+	return result
+}
+
+func effectiveGasPrice(tx *types.Transaction, baseFee *big.Int) *big.Int {
+	price := tx.GasTipCap()
+	price.Add(price, baseFee)
+	if tx.GasFeeCapIntCmp(price) < 0 {
+		return tx.GasFeeCap()
+	}
+	return price
+}
+
+func marshalReceipt(receipt *types.Receipt, tx *types.Transaction, blockHash common.Hash, blockNumber, index uint64) map[string]any {
+	from, _ := types.Sender(types.LatestSignerForChainID(tx.ChainId()), tx)
+	logs := receipt.Logs
+	if logs == nil {
+		logs = []*types.Log{}
+	}
+	result := map[string]any{
+		"blockHash":         blockHash,
+		"blockNumber":       hexutil.Uint64(blockNumber),
+		"transactionHash":   tx.Hash(),
+		"transactionIndex":  hexutil.Uint64(index),
+		"from":              from,
+		"to":                tx.To(),
+		"gasUsed":           hexutil.Uint64(receipt.GasUsed),
+		"cumulativeGasUsed": hexutil.Uint64(receipt.CumulativeGasUsed),
+		"contractAddress":   nil,
+		"logs":              logs,
+		"logsBloom":         receipt.Bloom,
+		"type":              hexutil.Uint64(tx.Type()),
+		"effectiveGasPrice": (*hexutil.Big)(receipt.EffectiveGasPrice),
+	}
+	if len(receipt.PostState) > 0 {
+		result["root"] = hexutil.Bytes(receipt.PostState)
+	} else {
+		result["status"] = hexutil.Uint64(receipt.Status)
+	}
+	if receipt.ContractAddress != (common.Address{}) {
+		result["contractAddress"] = receipt.ContractAddress
+	}
+	if tx.Type() == types.BlobTxType {
+		result["blobGasUsed"] = hexutil.Uint64(receipt.BlobGasUsed)
+		result["blobGasPrice"] = (*hexutil.Big)(receipt.BlobGasPrice)
 	}
 	return result
 }

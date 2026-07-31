@@ -162,6 +162,167 @@ func TestInProcessRPC(t *testing.T) {
 	}
 }
 
+func TestRawTransactionRPCIsCastCompatible(t *testing.T) {
+	node, err := New(testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+
+	accounts, err := DeriveAccounts(DefaultMnemonic, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chainID := new(big.Int).SetUint64(DefaultChainID)
+	unsigned := types.NewTx(&types.DynamicFeeTx{
+		ChainID: chainID, Nonce: 0,
+		GasTipCap: big.NewInt(1_000_000_000), GasFeeCap: big.NewInt(3_000_000_000),
+		Gas: 21_000, To: &accounts[1].Address, Value: big.NewInt(1),
+	})
+	signed, err := types.SignTx(unsigned, types.LatestSignerForChainID(chainID), accounts[0].PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := signed.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client := node.RPCClient()
+	defer client.Close()
+	var syncReceipt map[string]any
+	if err := client.Call(&syncReceipt, "eth_sendRawTransactionSync", hexutil.Bytes(raw)); err != nil {
+		t.Fatal(err)
+	}
+	assertRPCSenderAndRecipient(t, syncReceipt, accounts[0].Address, accounts[1].Address)
+	if syncReceipt["transactionHash"] != signed.Hash().Hex() {
+		t.Fatalf("sync receipt transactionHash = %v, want %s", syncReceipt["transactionHash"], signed.Hash())
+	}
+
+	var transaction map[string]any
+	if err := client.Call(&transaction, "eth_getTransactionByHash", signed.Hash()); err != nil {
+		t.Fatal(err)
+	}
+	assertRPCSenderAndRecipient(t, transaction, accounts[0].Address, accounts[1].Address)
+	for _, field := range []string{"blockHash", "blockNumber", "blockTimestamp", "transactionIndex"} {
+		if transaction[field] == nil {
+			t.Fatalf("transaction is missing mined field %q: %#v", field, transaction)
+		}
+	}
+
+	var receipt map[string]any
+	if err := client.Call(&receipt, "eth_getTransactionReceipt", signed.Hash()); err != nil {
+		t.Fatal(err)
+	}
+	assertRPCSenderAndRecipient(t, receipt, accounts[0].Address, accounts[1].Address)
+	if receipt["contractAddress"] != nil {
+		t.Fatalf("transfer contractAddress = %v, want null", receipt["contractAddress"])
+	}
+}
+
+func TestSendRawTransactionSyncWaitsAndReturnsStructuredTimeout(t *testing.T) {
+	cfg := testConfig()
+	cfg.Mining.Mode = "manual"
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+
+	accounts, err := DeriveAccounts(DefaultMnemonic, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chainID := new(big.Int).SetUint64(DefaultChainID)
+	sign := func(nonce uint64) *types.Transaction {
+		t.Helper()
+		unsigned := types.NewTx(&types.DynamicFeeTx{
+			ChainID: chainID, Nonce: nonce,
+			GasTipCap: big.NewInt(1_000_000_000), GasFeeCap: big.NewInt(3_000_000_000),
+			Gas: 21_000, To: &accounts[1].Address, Value: big.NewInt(1),
+		})
+		signed, signErr := types.SignTx(unsigned, types.LatestSignerForChainID(chainID), accounts[0].PrivateKey)
+		if signErr != nil {
+			t.Fatal(signErr)
+		}
+		return signed
+	}
+
+	client := node.RPCClient()
+	defer client.Close()
+	first := sign(0)
+	firstRaw, err := first.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type callResult struct {
+		receipt map[string]any
+		err     error
+	}
+	done := make(chan callResult, 1)
+	go func() {
+		var receipt map[string]any
+		callErr := client.Call(&receipt, "eth_sendRawTransactionSync", hexutil.Bytes(firstRaw))
+		done <- callResult{receipt: receipt, err: callErr}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for node.chain.pendingCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if node.chain.pendingCount() == 0 {
+		t.Fatal("synchronous transaction was not submitted before waiting")
+	}
+	if _, err := node.Mine(context.Background(), 1, false); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-done:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		assertRPCSenderAndRecipient(t, result.receipt, accounts[0].Address, accounts[1].Address)
+	case <-time.After(time.Second):
+		t.Fatal("synchronous transaction did not return after mining")
+	}
+
+	second := sign(1)
+	secondRaw, err := second.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt map[string]any
+	err = client.Call(&receipt, "eth_sendRawTransactionSync", hexutil.Bytes(secondRaw), uint64(10))
+	if err == nil {
+		t.Fatal("expected synchronous transaction timeout")
+	}
+	var rpcErr rpc.Error
+	if !errors.As(err, &rpcErr) || rpcErr.ErrorCode() != 4 {
+		t.Fatalf("timeout error = %T %v, want RPC code 4", err, err)
+	}
+	var dataErr rpc.DataError
+	if !errors.As(err, &dataErr) || dataErr.ErrorData() != second.Hash().Hex() {
+		t.Fatalf("timeout data = %v, want %s", dataErr.ErrorData(), second.Hash())
+	}
+}
+
+func assertRPCSenderAndRecipient(t *testing.T, value map[string]any, from, to common.Address) {
+	t.Helper()
+	fromValue, fromOK := value["from"].(string)
+	if !fromOK || common.HexToAddress(fromValue) != from {
+		t.Fatalf("from = %v, want %s in %#v", value["from"], from, value)
+	}
+	toValue, toOK := value["to"].(string)
+	if !toOK || common.HexToAddress(toValue) != to {
+		t.Fatalf("to = %v, want %s in %#v", value["to"], to, value)
+	}
+}
+
 func TestSnapshotIsOneShotAndReorgEventsAreOrdered(t *testing.T) {
 	cfg := testConfig()
 	cfg.Mining.Mode = "manual"
