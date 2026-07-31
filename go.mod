@@ -8,7 +8,7 @@ require (
 	github.com/attestantio/go-eth2-client v0.29.0
 	github.com/ethereum/go-ethereum v1.17.5
 	github.com/holiman/uint256 v1.3.2
-	github.com/klauspost/compress v1.17.11
+	github.com/klauspost/compress v1.19.1
 	github.com/protolambda/bls12-381-util v0.1.0
 	github.com/tyler-smith/go-bip32 v1.0.0
 	github.com/tyler-smith/go-bip39 v1.1.0
