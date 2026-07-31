@@ -42,7 +42,7 @@ func TestSpecLockDigestPathsForceLF(t *testing.T) {
 		t.Fatal(err)
 	}
 	lfPaths := make(map[string]struct{})
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 3 || strings.HasPrefix(fields[0], "#") {
 			continue

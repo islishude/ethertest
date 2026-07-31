@@ -71,8 +71,8 @@ func (err *txSyncTimeoutError) Error() string {
 	return fmt.Sprintf("The transaction was added to the transaction pool but wasn't processed in %v", err.timeout)
 }
 
-func (err *txSyncTimeoutError) ErrorCode() int         { return 4 }
-func (err *txSyncTimeoutError) ErrorData() interface{} { return err.hash.Hex() }
+func (err *txSyncTimeoutError) ErrorCode() int { return 4 }
+func (err *txSyncTimeoutError) ErrorData() any { return err.hash.Hex() }
 
 type installedFilterKind uint8
 

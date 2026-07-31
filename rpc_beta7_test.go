@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"math/big"
 	"strings"
 	"testing"
@@ -413,9 +414,7 @@ func TestBeta7SigningAndAccessList(t *testing.T) {
 				"type": hexutil.Uint64(test.typeID), "from": accounts[0].Address, "to": accounts[3].Address,
 				"nonce": "0x0", "gas": "0x186a0", "value": "0x1", "chainId": hexutil.Uint64(cfg.Chain.ChainID),
 			}
-			for key, value := range test.args {
-				args[key] = value
-			}
+			maps.Copy(args, test.args)
 			var raw hexutil.Bytes
 			if err := client.Call(&raw, "eth_signTransaction", args); err != nil {
 				t.Fatal(err)
@@ -538,9 +537,7 @@ func TestBeta7PreOsakaBlobSigningAndSubmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	invalidProofArgs := make(map[string]any, len(args)+2)
-	for key, value := range args {
-		invalidProofArgs[key] = value
-	}
+	maps.Copy(invalidProofArgs, args)
 	invalidProofArgs["commitments"] = []kzg4844.Commitment{commitment}
 	invalidProofArgs["proofs"] = []kzg4844.Proof{{}}
 	var rejectedRaw hexutil.Bytes
@@ -829,7 +826,7 @@ func TestBeta7FilterReorgReplacementAutoMineAndRingGaps(t *testing.T) {
 			t.Fatal(err)
 		}
 		accounts := node.Accounts()
-		for index := 0; index < 3; index++ {
+		for index := range 3 {
 			var hash common.Hash
 			if err := client.Call(&hash, "eth_sendTransaction", map[string]any{
 				"from": accounts[index], "to": accounts[9], "nonce": "0x0", "gas": "0x5208",

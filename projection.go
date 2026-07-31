@@ -108,7 +108,7 @@ func (m *consensusModel) ensureProjection(chain *executionChain, block *types.Bl
 		return record, nil
 	}
 	if block.NumberU64() != 0 {
-		return storedProjection{}, fmt.Errorf("Beacon projection for published block %s is missing", block.Hash())
+		return storedProjection{}, fmt.Errorf("beacon projection for published block %s is missing", block.Hash())
 	}
 	record, encoded, err := m.projectionRecord(chain, block)
 	if err != nil {

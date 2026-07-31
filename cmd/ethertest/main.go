@@ -125,9 +125,9 @@ func printDevelopmentAccounts(output io.Writer, cfg ethertest.Config) {
 		return
 	}
 	accounts, _ := ethertest.DeriveAccounts(cfg.Accounts.Mnemonic, cfg.Accounts.Count)
-	fmt.Fprintln(output, "Unlocked development accounts (never use these keys on a real network):")
+	_, _ = fmt.Fprintln(output, "Unlocked development accounts (never use these keys on a real network):")
 	for index, account := range accounts {
-		fmt.Fprintf(output, "  (%d) %s  %s  %s\n", index, account.Address, hex.EncodeToString(crypto.FromECDSA(account.PrivateKey)), account.Path)
+		_, _ = fmt.Fprintf(output, "  (%d) %s  %s  %s\n", index, account.Address, hex.EncodeToString(crypto.FromECDSA(account.PrivateKey)), account.Path)
 	}
 }
 

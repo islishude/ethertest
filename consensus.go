@@ -246,7 +246,7 @@ func (m *consensusModel) signedBlockLocked(chain *executionChain, block *types.B
 		return stored, nil
 	}
 	if block.NumberU64() != 0 && chain.blockchain.GetBlockByHash(block.Hash()) != nil {
-		return nil, fmt.Errorf("Beacon projection for published block %s is missing", block.Hash())
+		return nil, fmt.Errorf("beacon projection for published block %s is missing", block.Hash())
 	}
 	slot := chain.slotOf(block)
 	parentRoot := phase0.Root{}

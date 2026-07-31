@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -180,9 +181,7 @@ func (n *Node) switchCanonical(chain *executionChain, target *types.Block, targe
 	chain.mu.RLock()
 	timeline := chain.timeline()
 	canonicalSlots := make(map[uint64]common.Hash, len(chain.canonicalBlockBySlot))
-	for slot, hash := range chain.canonicalBlockBySlot {
-		canonicalSlots[slot] = hash
-	}
+	maps.Copy(canonicalSlots, chain.canonicalBlockBySlot)
 	chain.mu.RUnlock()
 	timeline.CurrentSlot, timeline.LastProcessedSlot = targetSlot, targetSlot
 	timelineMutation, err := timelinePut(timeline)

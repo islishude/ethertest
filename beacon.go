@@ -115,7 +115,7 @@ func beaconWantsSSZ(r *http.Request) (bool, error) {
 		return false, nil
 	}
 	jsonQuality, sszQuality := -1.0, -1.0
-	for _, item := range strings.Split(accept, ",") {
+	for item := range strings.SplitSeq(accept, ",") {
 		mediaType, parameters, err := mime.ParseMediaType(strings.TrimSpace(item))
 		if err != nil {
 			return false, errors.New("invalid Accept header")
@@ -808,7 +808,7 @@ func requestedBeaconTopics(r *http.Request) (map[string]bool, error) {
 	}
 	result := make(map[string]bool, len(values))
 	for _, value := range values {
-		for _, topic := range strings.Split(value, ",") {
+		for topic := range strings.SplitSeq(value, ",") {
 			if _, supported := beaconGeneratedEventTopics[topic]; !supported {
 				return nil, fmt.Errorf("invalid or unsupported event topic %q", topic)
 			}

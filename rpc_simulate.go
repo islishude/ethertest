@@ -642,8 +642,7 @@ func simulationMessage(args *callArgs, baseFee *big.Int, skipNonce bool) (*core.
 	if err != nil {
 		return nil, err
 	}
-	zero := new(uint256.Int)
-	gasPrice, feeCap, tipCap := zero.Clone(), zero.Clone(), zero.Clone()
+	var gasPrice, feeCap, tipCap *uint256.Int
 	if args.GasPrice != nil {
 		gasPrice, err = checkedU256("gasPrice", args.GasPrice.ToInt())
 		if err != nil {
