@@ -5,30 +5,66 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
 )
 
+type specLock struct {
+	Sources []specLockSource `toml:"source"`
+}
+
+type specLockSource struct {
+	Name            string `toml:"name"`
+	Subset          string `toml:"subset"`
+	SubsetSHA256    string `toml:"subset_sha256"`
+	Generated       string `toml:"generated"`
+	GeneratedSHA256 string `toml:"generated_sha256"`
+}
+
 func TestSpecLockDigests(t *testing.T) {
-	var lock struct {
-		Sources []struct {
-			Name            string `toml:"name"`
-			Subset          string `toml:"subset"`
-			SubsetSHA256    string `toml:"subset_sha256"`
-			Generated       string `toml:"generated"`
-			GeneratedSHA256 string `toml:"generated_sha256"`
-		} `toml:"source"`
-	}
-	if _, err := toml.DecodeFile("spec.lock", &lock); err != nil {
-		t.Fatal(err)
-	}
+	lock := readSpecLock(t)
 	for _, source := range lock.Sources {
 		if source.Subset != "" {
 			assertLockedDigest(t, source.Name+" subset", source.Subset, source.SubsetSHA256)
 		}
 		if source.Generated != "" {
 			assertLockedDigest(t, source.Name+" generated output", source.Generated, source.GeneratedSHA256)
+		}
+	}
+}
+
+func TestSpecLockDigestPathsForceLF(t *testing.T) {
+	lock := readSpecLock(t)
+	data, err := os.ReadFile(".gitattributes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lfPaths := make(map[string]struct{})
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || strings.HasPrefix(fields[0], "#") {
+			continue
+		}
+		attributes := make(map[string]struct{}, len(fields)-1)
+		for _, attribute := range fields[1:] {
+			attributes[attribute] = struct{}{}
+		}
+		_, text := attributes["text"]
+		_, lf := attributes["eol=lf"]
+		if text && lf {
+			lfPaths[strings.TrimPrefix(fields[0], "/")] = struct{}{}
+		}
+	}
+	for _, source := range lock.Sources {
+		for _, path := range []string{source.Subset, source.Generated} {
+			if path == "" {
+				continue
+			}
+			if _, ok := lfPaths[path]; !ok {
+				t.Errorf("locked digest path %s must have an explicit `text eol=lf` entry in .gitattributes", path)
+			}
 		}
 	}
 }
@@ -113,4 +149,13 @@ func assertLockedDigest(t *testing.T, name, path, want string) {
 	if got := hex.EncodeToString(digest[:]); got != want {
 		t.Fatalf("%s digest = %s, want %s", name, got, want)
 	}
+}
+
+func readSpecLock(t *testing.T) specLock {
+	t.Helper()
+	var lock specLock
+	if _, err := toml.DecodeFile("spec.lock", &lock); err != nil {
+		t.Fatal(err)
+	}
+	return lock
 }
