@@ -95,7 +95,7 @@ func newConsensusModel(cfg Config, executionAddresses []common.Address) (*consen
 	}
 	validatorRoots := make([][32]byte, cfg.Chain.Validators)
 	for index := range cfg.Chain.Validators {
-		seed := sha256.Sum256([]byte(fmt.Sprintf("ethertest-validator-%d", index)))
+		seed := sha256.Sum256(fmt.Appendf(nil, "ethertest-validator-%d", index))
 		key := new(bls.SecretKey)
 		if err := key.Deserialize(&seed); err != nil {
 			return nil, err

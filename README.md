@@ -202,6 +202,14 @@ transaction spanning geth's block writes and every auxiliary namespace.
 
 ## Development
 
+Use the Go version declared in `go.mod`.
+
+Install the latest golangci-lint before running the lint target:
+
+```sh
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+```
+
 ```sh
 make test
 make test-race
@@ -209,9 +217,10 @@ make lint
 make build
 ```
 
-These Make targets default to `CGO_ENABLED=1`. The existing GoReleaser
-cross-platform archives remain a CGO-free, release-gated exception and are not
-part of this migration.
+`make lint` checks production and test code with the standard golangci-lint set,
+the `modernize` analyzer, and `gofmt`. It uses read-only module mode
+so linting cannot rewrite `go.mod` or `go.sum`; CI runs the same pinned tool and
+configuration in a dedicated job.
 
 Upstream protocol inputs are pinned in `spec.lock`; the consumed minimal/Fulu
 constants and API surface contracts are vendored under `specs/upstream`.

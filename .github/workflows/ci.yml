@@ -8,6 +8,19 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "stable"
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+
   test:
     strategy:
       matrix:
@@ -21,18 +34,5 @@ jobs:
         with:
           go-version: "stable"
           cache: true
-      - run: go test ./...
-      - run: go vet ./...
-      - name: GO build
-        run: go build -trimpath ./cmd/ethertest
-
-  race:
-    runs-on: ubuntu-latest
-    env:
-      CGO_ENABLED: "1"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: "stable"
       - run: go test -race ./...
+      - run: go build ./...

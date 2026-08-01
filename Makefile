@@ -1,6 +1,7 @@
 .PHONY: all build test test-race lint generate-check clean
 
 GO ?= go
+GOLANGCI_LINT ?= golangci-lint
 
 all: test build
 
@@ -14,7 +15,7 @@ test-race:
 	$(GO) test -race ./...
 
 lint:
-	$(GO) vet ./...
+	$(GOLANGCI_LINT) run
 
 generate-check:
 	$(GO) run ./internal/beaconcontractgen -check
