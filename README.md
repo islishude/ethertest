@@ -36,7 +36,7 @@ are never included in structured logs, errors, metrics, or state archives.
 
 ### Docker Compose
 
-The included Compose example builds the CGO-free, nonroot image, publishes the
+The included Compose example builds the cgo-enabled, nonroot image, publishes the
 shared API listener to host loopback only, and persists Pebble plus the
 graceful-shutdown state archive:
 
@@ -96,14 +96,14 @@ methods: 49 are implemented and 29 are deliberately unregistered. Existing
 `web3`, `personal`, `miner`, subscription, and `ethertest`/`anvil`/`evm`
 extensions remain available but are not counted in that baseline.
 
-| Surface | Status |
-| --- | --- |
-| `eth` block, transaction, receipt, state, fee, filter, signing, config, capabilities, and `eth_simulateV1` methods | 41 implemented |
-| `debug_getRawHeader`, `debug_getRawBlock`, `debug_getRawReceipts`, `debug_getRawTransaction` | 4 implemented |
-| `net_version`, `txpool_status`, `txpool_content`, `txpool_contentFrom` | 4 implemented |
-| All 25 `engine_*` methods | Excluded until ethertest has a real authenticated EL/CL Engine API boundary |
-| `debug_getBadBlocks`, `testing_buildBlockV1` | Excluded because v0.1 has no truthful sync bad-block pipeline or public upstream testing service |
-| `eth_getBlockAccessList`, `debug_getRawBlockAccessList` | Excluded until Amsterdam/EIP-7928 is supported |
+| Surface                                                                                                            | Status                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `eth` block, transaction, receipt, state, fee, filter, signing, config, capabilities, and `eth_simulateV1` methods | 41 implemented                                                                                   |
+| `debug_getRawHeader`, `debug_getRawBlock`, `debug_getRawReceipts`, `debug_getRawTransaction`                       | 4 implemented                                                                                    |
+| `net_version`, `txpool_status`, `txpool_content`, `txpool_contentFrom`                                             | 4 implemented                                                                                    |
+| All 25 `engine_*` methods                                                                                          | Excluded until ethertest has a real authenticated EL/CL Engine API boundary                      |
+| `debug_getBadBlocks`, `testing_buildBlockV1`                                                                       | Excluded because v0.1 has no truthful sync bad-block pipeline or public upstream testing service |
+| `eth_getBlockAccessList`, `debug_getRawBlockAccessList`                                                            | Excluded until Amsterdam/EIP-7928 is supported                                                   |
 
 `safe` and `finalized` continue to be synthetic slot-derived tags. Built-in
 development accounts are the only accounts accepted by `eth_sign`,
@@ -206,8 +206,12 @@ transaction spanning geth's block writes and every auxiliary namespace.
 make test
 make test-race
 make lint
-CGO_ENABLED=0 make build
+make build
 ```
+
+These Make targets default to `CGO_ENABLED=1`. The existing GoReleaser
+cross-platform archives remain a CGO-free, release-gated exception and are not
+part of this migration.
 
 Upstream protocol inputs are pinned in `spec.lock`; the consumed minimal/Fulu
 constants and API surface contracts are vendored under `specs/upstream`.

@@ -48,7 +48,8 @@ closed with test evidence.
 - Non-loopback listeners require explicit unsafe opt-in.
 - TLS accepts user-provided cert/key pairs only and must fail before binding
   when the material is invalid.
-- Preserve the nonroot, CGO-free container runtime.
+- Preserve the nonroot container runtime. Project Docker builds enable cgo and
+  keep their dynamic runtime dependency limited to the distroless glibc base.
 
 ## Development workflow
 
@@ -58,13 +59,13 @@ Run formatting and the checks relevant to the change:
 gofmt -w *.go cmd/ethertest/*.go
 go test ./...
 go vet ./...
-CGO_ENABLED=0 go test ./...
 go test -race ./...
 ```
 
-Use `go test ./...` for normal changes; run the CGO-free and race gates for
-concurrency, persistence, RPC, consensus, KZG, or release-facing changes. Add a
-regression test for every corrected invariant.
+Use the cgo-enabled `go test ./...` for normal changes; run the secp256k1 cgo
+backend assertion and race gate for concurrency, persistence, RPC, consensus,
+KZG, container, or release-facing changes. Add a regression test for every
+corrected invariant.
 
 Do not edit unrelated user changes, stage files, create commits, publish images,
 or create releases unless explicitly requested.
