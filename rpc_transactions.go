@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"time"
 
 	gethaccounts "github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
@@ -558,4 +559,98 @@ func accessListsEqual(left, right types.AccessList) bool {
 		}
 	}
 	return true
+}
+
+const (
+	txSyncDefaultTimeout = 20 * time.Second
+	txSyncMaxTimeout     = time.Minute
+)
+
+type txSyncTimeoutError struct {
+	timeout time.Duration
+	hash    common.Hash
+}
+
+func (err *txSyncTimeoutError) Error() string {
+	return fmt.Sprintf("The transaction was added to the transaction pool but wasn't processed in %v", err.timeout)
+}
+
+func (err *txSyncTimeoutError) ErrorCode() int { return 4 }
+func (err *txSyncTimeoutError) ErrorData() any { return err.hash.Hex() }
+
+func (api *ethAPI) SendRawTransaction(ctx context.Context, raw hexutil.Bytes) (common.Hash, error) {
+	var tx types.Transaction
+	if err := tx.UnmarshalBinary(raw); err != nil {
+		return common.Hash{}, err
+	}
+	return api.node.SendTransaction(ctx, &tx)
+}
+
+func (api *ethAPI) SendRawTransactionSync(ctx context.Context, raw hexutil.Bytes, timeoutMilliseconds *uint64) (map[string]any, error) {
+	var tx types.Transaction
+	if err := tx.UnmarshalBinary(raw); err != nil {
+		return nil, err
+	}
+
+	revision := api.node.Revision()
+	hash, err := api.node.SendTransaction(ctx, &tx)
+	if err != nil {
+		return nil, err
+	}
+	if receipt, err := api.transactionReceipt(hash); err != nil || receipt != nil {
+		return receipt, err
+	}
+
+	timeout := txSyncDefaultTimeout
+	if timeoutMilliseconds != nil && *timeoutMilliseconds > 0 {
+		maxMilliseconds := uint64(txSyncMaxTimeout / time.Millisecond)
+		if *timeoutMilliseconds >= maxMilliseconds {
+			timeout = txSyncMaxTimeout
+		} else {
+			timeout = time.Duration(*timeoutMilliseconds) * time.Millisecond
+		}
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	for {
+		events, changed, err := api.node.events.sinceAndWait(revision)
+		if errors.Is(err, ErrEventGap) {
+			revision = api.node.Revision()
+			if receipt, receiptErr := api.transactionReceipt(hash); receiptErr != nil || receipt != nil {
+				return receipt, receiptErr
+			}
+		} else if err != nil {
+			return nil, err
+		} else {
+			for _, event := range events {
+				revision = event.Revision
+				if event.Type != "block" || event.Removed {
+					continue
+				}
+				if receipt, err := api.transactionReceipt(hash); err != nil || receipt != nil {
+					return receipt, err
+				}
+			}
+		}
+
+		select {
+		case <-waitCtx.Done():
+			if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+				return nil, &txSyncTimeoutError{timeout: timeout, hash: hash}
+			}
+			return nil, waitCtx.Err()
+		case <-changed:
+		case <-api.node.stopping:
+			return nil, ErrNodeStopped
+		}
+	}
+}
+
+func (api *ethAPI) SendTransaction(ctx context.Context, args callArgs) (common.Hash, error) {
+	tx, err := api.buildAndSignTransaction(ctx, args, false)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	return api.node.SendTransaction(ctx, tx)
 }
