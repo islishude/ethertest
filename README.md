@@ -69,7 +69,8 @@ The network surface currently includes:
 
 - Core `eth`, `net`, `web3`, `txpool`, `miner`, `personal`, and `debug` methods.
 - EIP-1186 proofs, state overrides, polling filters, `newHeads`, HTTP/WS batch,
-  struct logging, and native Go tracers. JavaScript tracers are rejected.
+  struct logging, `debug_traceBlockByHash`, `debug_traceBlockByNumber`, and
+  native Go tracers. JavaScript tracers are rejected.
 - One immutable pending candidate view shared by pending block/state/call/proof
   queries, with deterministic executable/queued classification.
 - Type-3 raw submission with mandatory KZG validation, Deneb JSON/SSZ sidecars,

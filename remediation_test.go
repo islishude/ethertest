@@ -1002,8 +1002,13 @@ func TestTraceTransactionReplaysPreExecutionSystemCalls(t *testing.T) {
 	if _, err := node.SendTransaction(context.Background(), historyTx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := node.Mine(context.Background(), 1, false); err != nil {
+	hashes, err := node.Mine(context.Background(), 1, false)
+	if err != nil {
 		t.Fatal(err)
+	}
+	block := node.chain.blockchain.GetBlockByHash(hashes[0])
+	if block == nil {
+		t.Fatal("mined block not found")
 	}
 	parentProjection, err := node.consensus.ensureProjection(node.chain, node.chain.blockchain.Genesis())
 	if err != nil {
@@ -1031,6 +1036,25 @@ func TestTraceTransactionReplaysPreExecutionSystemCalls(t *testing.T) {
 		}
 		if trace.Error != "" || common.BytesToHash(trace.Output) != test.want {
 			t.Fatalf("trace %s output=%x error=%q, want %s", test.hash, []byte(trace.Output), trace.Error, test.want)
+		}
+	}
+	var blockTraces []traceResult
+	if err := client.Call(&blockTraces, "debug_traceBlockByHash", block.Hash(), map[string]any{"tracer": "callTracer"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(blockTraces) != 2 {
+		t.Fatalf("block trace length = %d, want 2", len(blockTraces))
+	}
+	for index, want := range []common.Hash{common.Hash(parentProjection.Root), node.chain.blockchain.Genesis().Hash()} {
+		var trace struct {
+			Output hexutil.Bytes `json:"output"`
+			Error  string        `json:"error"`
+		}
+		if err := json.Unmarshal(blockTraces[index].Result, &trace); err != nil {
+			t.Fatal(err)
+		}
+		if trace.Error != "" || common.BytesToHash(trace.Output) != want {
+			t.Fatalf("block trace %d output=%x error=%q, want %s", index, []byte(trace.Output), trace.Error, want)
 		}
 	}
 }

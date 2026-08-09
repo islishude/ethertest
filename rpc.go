@@ -673,6 +673,11 @@ type traceConfig struct {
 	Limit            int             `json:"limit"`
 }
 
+type traceResult struct {
+	TxHash common.Hash     `json:"txHash"`
+	Result json.RawMessage `json:"result,omitempty"`
+}
+
 func (api *debugAPI) TraceCall(ctx context.Context, args callArgs, selector rpc.BlockNumberOrHash, config *traceConfig) (json.RawMessage, error) {
 	if config == nil || config.Tracer == nil {
 		loggerConfig := new(logger.Config)
@@ -712,9 +717,45 @@ func (api *debugAPI) TraceTransaction(ctx context.Context, hash common.Hash, con
 	if block == nil || blockNumber == 0 {
 		return nil, errors.New("transaction block is unavailable")
 	}
+	results, err := api.traceBlock(ctx, block, config, &transactionIndex)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) != 1 {
+		return nil, errors.New("transaction index is out of bounds")
+	}
+	return results[0].Result, nil
+}
+
+func (api *debugAPI) TraceBlockByHash(ctx context.Context, hash common.Hash, config *traceConfig) ([]*traceResult, error) {
+	block := api.node.chain.blockchain.GetBlockByHash(hash)
+	if block == nil {
+		return nil, fmt.Errorf("block %s not found", hash.Hex())
+	}
+	return api.traceBlock(ctx, block, config, nil)
+}
+
+func (api *debugAPI) TraceBlockByNumber(ctx context.Context, number rpc.BlockNumber, config *traceConfig) ([]*traceResult, error) {
+	block, err := api.node.blockByNumber(number)
+	if err != nil {
+		return nil, err
+	}
+	if block == nil {
+		return nil, fmt.Errorf("block #%d not found", number)
+	}
+	return api.traceBlock(ctx, block, config, nil)
+}
+
+func (api *debugAPI) traceBlock(ctx context.Context, block *types.Block, config *traceConfig, target *uint64) ([]*traceResult, error) {
+	if block.NumberU64() == 0 {
+		return nil, errors.New("genesis is not traceable")
+	}
+	if config != nil && config.Tracer != nil && tracers.DefaultDirectory.IsJS(*config.Tracer) {
+		return nil, errors.New("JavaScript tracers are not supported")
+	}
 	parent := api.node.chain.blockchain.GetHeaderByHash(block.ParentHash())
 	if parent == nil {
-		return nil, errors.New("transaction parent is unavailable")
+		return nil, errors.New("block parent is unavailable")
 	}
 	state, err := api.node.chain.blockchain.StateAt(parent)
 	if err != nil {
@@ -726,38 +767,25 @@ func (api *debugAPI) TraceTransaction(ctx context.Context, hash common.Hash, con
 	preEVM := vm.NewEVM(blockContext, state, api.node.chain.config, vm.Config{})
 	core.PreExecution(ctx, block.BeaconRoot(), parent, api.node.chain.config, preEVM, block.Number(), block.Time())
 	preEVM.Release()
-	var hooks *tracing.Hooks
-	var getResult func() (json.RawMessage, error)
-	var stopTracer func(error)
-	if config == nil || config.Tracer == nil {
-		loggerConfig := new(logger.Config)
-		if config != nil {
-			loggerConfig.EnableMemory, loggerConfig.DisableStack = config.EnableMemory, config.DisableStack
-			loggerConfig.DisableStorage, loggerConfig.EnableReturnData = config.DisableStorage, config.EnableReturnData
-			loggerConfig.Limit = config.Limit
-		}
-		structured := logger.NewStructLogger(loggerConfig)
-		hooks, getResult, stopTracer = structured.Hooks(), structured.GetResult, func(error) {}
-	} else {
-		if tracers.DefaultDirectory.IsJS(*config.Tracer) {
-			return nil, errors.New("JavaScript tracers are not supported")
-		}
-		native, err := tracers.DefaultDirectory.New(*config.Tracer, &tracers.Context{
-			BlockHash: blockHash, BlockNumber: new(big.Int).SetUint64(blockNumber),
-			TxIndex: int(transactionIndex), TxHash: hash,
-		}, config.TracerConfig, api.node.chain.config)
-		if err != nil {
-			return nil, err
-		}
-		hooks, getResult, stopTracer = native.Hooks, native.GetResult, native.Stop
-	}
+
+	results := make([]*traceResult, 0, len(block.Transactions()))
 	for index, tx := range block.Transactions() {
 		message, err := core.TransactionToMessage(tx, signer, block.BaseFee())
 		if err != nil {
 			return nil, err
 		}
+		traceThis := target == nil || *target == uint64(index)
+		var hooks *tracing.Hooks
+		var getResult func() (json.RawMessage, error)
+		var stopTracer func(error)
+		if traceThis {
+			hooks, getResult, stopTracer, err = api.newTracer(config, block, index, tx.Hash())
+			if err != nil {
+				return nil, err
+			}
+		}
 		vmConfig := vm.Config{}
-		if uint64(index) == transactionIndex {
+		if traceThis {
 			vmConfig.Tracer = hooks
 		}
 		evm := vm.NewEVM(blockContext, state, api.node.chain.config, vmConfig)
@@ -770,16 +798,44 @@ func (api *debugAPI) TraceTransaction(ctx context.Context, hash common.Hash, con
 		stop()
 		evm.Release()
 		if applyErr != nil {
-			if uint64(index) == transactionIndex {
+			if traceThis {
 				stopTracer(applyErr)
 			}
 			return nil, applyErr
 		}
-		if uint64(index) == transactionIndex {
-			return getResult()
+		if traceThis {
+			result, err := getResult()
+			if err != nil {
+				return nil, err
+			}
+			results = append(results, &traceResult{TxHash: tx.Hash(), Result: result})
 		}
 	}
-	return nil, errors.New("transaction index is out of bounds")
+	return results, nil
+}
+
+func (api *debugAPI) newTracer(config *traceConfig, block *types.Block, index int, hash common.Hash) (*tracing.Hooks, func() (json.RawMessage, error), func(error), error) {
+	if config == nil || config.Tracer == nil {
+		loggerConfig := new(logger.Config)
+		if config != nil {
+			loggerConfig.EnableMemory, loggerConfig.DisableStack = config.EnableMemory, config.DisableStack
+			loggerConfig.DisableStorage, loggerConfig.EnableReturnData = config.DisableStorage, config.EnableReturnData
+			loggerConfig.Limit = config.Limit
+		}
+		structured := logger.NewStructLogger(loggerConfig)
+		return structured.Hooks(), structured.GetResult, func(error) {}, nil
+	}
+	if tracers.DefaultDirectory.IsJS(*config.Tracer) {
+		return nil, nil, nil, errors.New("JavaScript tracers are not supported")
+	}
+	native, err := tracers.DefaultDirectory.New(*config.Tracer, &tracers.Context{
+		BlockHash: block.Hash(), BlockNumber: new(big.Int).SetUint64(block.NumberU64()),
+		TxIndex: index, TxHash: hash,
+	}, config.TracerConfig, api.node.chain.config)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return native.Hooks, native.GetResult, native.Stop, nil
 }
 
 func (api *ethAPI) GetBlockByNumber(_ context.Context, number rpc.BlockNumber, full bool) (map[string]any, error) {

@@ -3,6 +3,7 @@ package ethertest
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"math/big"
 	"net/http"
@@ -691,6 +692,111 @@ func TestCallAndNativeTracing(t *testing.T) {
 	var rejected any
 	if err := client.Call(&rejected, "debug_traceCall", args, "latest", map[string]any{"tracer": "{ return {}; }"}); err == nil {
 		t.Fatal("JavaScript tracer unexpectedly accepted")
+	}
+}
+
+func TestBlockTracingByHashAndNumber(t *testing.T) {
+	cfg := testConfig()
+	cfg.Mining.Mode = "manual"
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+	client := node.RPCClient()
+	defer client.Close()
+
+	emptyHashes, err := node.Mine(context.Background(), 1, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var empty []traceResult
+	if err := client.Call(&empty, "debug_traceBlockByHash", emptyHashes[0]); err != nil {
+		t.Fatal(err)
+	}
+	if empty == nil || len(empty) != 0 {
+		t.Fatalf("empty block trace = %#v, want []", empty)
+	}
+	var rejected json.RawMessage
+	if err := client.Call(&rejected, "debug_traceBlockByHash", emptyHashes[0], map[string]any{"tracer": "{ return {}; }"}); err == nil {
+		t.Fatal("JavaScript tracer unexpectedly accepted for an empty block")
+	}
+
+	account := node.chain.accounts[0]
+	first := signedDynamicTransaction(t, cfg, account, 0, node.Accounts()[1], big.NewInt(1), nil)
+	second := signedDynamicTransaction(t, cfg, account, 1, node.Accounts()[2], big.NewInt(2), nil)
+	if _, err := node.SendTransaction(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.SendTransaction(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	hashes, err := node.Mine(context.Background(), 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := node.chain.blockchain.GetBlockByHash(hashes[0])
+	if block == nil {
+		t.Fatal("mined block not found")
+	}
+
+	var structured []traceResult
+	if err := client.Call(&structured, "debug_traceBlockByHash", block.Hash(), map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(structured) != 2 || structured[0].TxHash != first.Hash() || structured[1].TxHash != second.Hash() {
+		t.Fatalf("hash block trace = %#v", structured)
+	}
+	for _, trace := range structured {
+		var result map[string]any
+		if err := json.Unmarshal(trace.Result, &result); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := result["structLogs"]; !ok {
+			t.Fatalf("missing structLogs in %#v", result)
+		}
+	}
+
+	var native []traceResult
+	if err := client.Call(&native, "debug_traceBlockByNumber", hexutil.Uint64(block.NumberU64()), map[string]any{"tracer": "callTracer"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(native) != 2 || native[0].TxHash != first.Hash() || native[1].TxHash != second.Hash() {
+		t.Fatalf("number block trace = %#v", native)
+	}
+	for _, trace := range native {
+		var result map[string]any
+		if err := json.Unmarshal(trace.Result, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result["type"] != "CALL" {
+			t.Fatalf("unexpected native trace %#v", result)
+		}
+	}
+
+	var latest []traceResult
+	if err := client.Call(&latest, "debug_traceBlockByNumber", "latest", map[string]any{"tracer": "callTracer"}); err != nil || len(latest) != 2 {
+		t.Fatalf("latest block trace = %d, %v", len(latest), err)
+	}
+	var pending []traceResult
+	if err := client.Call(&pending, "debug_traceBlockByNumber", "pending", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if pending == nil {
+		t.Fatal("pending block trace encoded as null")
+	}
+
+	if err := client.Call(&rejected, "debug_traceBlockByHash", block.Hash(), map[string]any{"tracer": "{ return {}; }"}); err == nil {
+		t.Fatal("JavaScript tracer unexpectedly accepted")
+	}
+	if err := client.Call(&rejected, "debug_traceBlockByHash", common.HexToHash("0xdead")); err == nil {
+		t.Fatal("missing block unexpectedly traced")
+	}
+	if err := client.Call(&rejected, "debug_traceBlockByNumber", "earliest"); err == nil {
+		t.Fatal("genesis unexpectedly traced")
 	}
 }
 
