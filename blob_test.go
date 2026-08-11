@@ -166,10 +166,10 @@ func TestBlobDatabaseFailureLeavesNoPoolResidue(t *testing.T) {
 	}
 	tx, err := SignBlobTransaction(BlobTransactionRequest{
 		ChainID: new(big.Int).SetUint64(cfg.Chain.ChainID), Nonce: 0,
-		To: node.chain.accounts[1].Address, Gas: 100_000,
+		To: node.Accounts()[1], Gas: 100_000,
 		GasTipCap: big.NewInt(1_000_000_000), GasFeeCap: big.NewInt(3_000_000_000),
 		BlobFeeCap: big.NewInt(1_000_000_000), Blob: blob,
-	}, node.chain.accounts[0].PrivateKey)
+	}, testWalletAccount(t, node, 0).PrivateKey)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -102,7 +102,7 @@ func TestBeaconTaintedEnvelopeAndValidatorFilters(t *testing.T) {
 	}
 	defer node.Close() //nolint:errcheck
 	zero := new(big.Int)
-	if _, err := node.ApplyControl(context.Background(), ControlChanges{node.chain.accounts[0].Address: {Balance: zero}}); err != nil {
+	if _, err := node.ApplyControl(context.Background(), ControlChanges{node.Accounts()[0]: {Balance: zero}}); err != nil {
 		t.Fatal(err)
 	}
 	handler := node.beaconHandler()

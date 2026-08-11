@@ -9,6 +9,12 @@ are anchored to immutable committed headers; block, retained blob sidecar,
 Beacon projection, and revision event publication are produced by that
 controller. The public Go API intentionally does not expose mutable geth state.
 
+A Node-owned, concurrency-safe in-memory wallet is the sole owner of signing
+keys. The execution chain receives configured addresses for genesis allocation,
+fee-recipient defaults, and synthetic validator setup, but never retains their
+private keys. Wallet mutation passes through the same ordered controller while
+address enumeration and signing use the wallet's read lock.
+
 Memory and Pebble use one `ethdb.Database` with separate prefixes for blob,
 control, checkpoint, branch, projection, safety, slot, and event data; geth owns
 its execution keys. A prepared-operation journal brackets execution block/head
@@ -33,6 +39,13 @@ The transaction pool is local and deterministic rather than geth's network
 pool. A single-writer rebuilds an immutable candidate block, post-execution
 state, receipts, and executable/queued classification after head or pool
 changes. All pending state queries resolve through that candidate.
+
+Runtime wallet membership is ephemeral control-plane state. It is deliberately
+independent of snapshots, checkpoints, branches, databases, and archives.
+Optional import funding is execution state: the control block is committed
+before the signer is published and follows normal persistence and taint rules.
+Consequently, a crash after that commit can leave a funded address without its
+runtime signer, which is also the defined state after every restart.
 
 Consensus finality is synthetic. Blocks, SSZ roots, proposer signatures, KZG
 proofs, and cross-layer references are intended to be cryptographically real,

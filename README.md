@@ -69,6 +69,8 @@ descendant, its branches, and the containing session/archive remain tainted.
 The network surface currently includes:
 
 - Core `eth`, `net`, `web3`, `txpool`, `miner`, `personal`, and `debug` methods.
+- An in-memory wallet for configured and runtime-imported signers, including
+  `eth_signTypedData_v4` and `ethertest_importAccount`/`ethertest_removeAccount`.
 - EIP-1186 proofs, state overrides, polling filters, `newHeads`, HTTP/WS batch,
   struct logging, `debug_traceBlockByHash`, `debug_traceBlockByNumber`, and
   native Go tracers. JavaScript tracers are rejected.
@@ -109,14 +111,15 @@ extensions remain available but are not counted in that baseline.
 | `debug_getBadBlocks`, `testing_buildBlockV1`                                                                       | Excluded because v0.1 has no truthful sync bad-block pipeline or public upstream testing service |
 | `eth_getBlockAccessList`, `debug_getRawBlockAccessList`                                                            | Excluded until Amsterdam/EIP-7928 is supported                                                   |
 
-`safe` and `finalized` continue to be synthetic slot-derived tags. Built-in
-development accounts are the only accounts accepted by `eth_sign`,
-`eth_signTransaction`, and `eth_sendTransaction`; signatures and errors never
-expose their keys or mnemonic. Pending blocks and transactions encode
-unconfirmed inclusion fields as `null`. Polling filters and pending-transaction
-history are bounded in-memory state and are not restored after restart.
-`eth_capabilities` reports the actual archive/state window while block,
-transaction, log, and receipt history starts at genesis.
+`safe` and `finalized` continue to be synthetic slot-derived tags. Configured
+development accounts and runtime-imported accounts are accepted by `eth_sign`,
+`eth_signTransaction`, `eth_sendTransaction`, and `eth_signTypedData_v4`;
+signatures and errors never expose their keys or mnemonic. These wallet methods
+are extensions and do not change the locked beta.7 method counts. Pending blocks
+and transactions encode unconfirmed inclusion fields as `null`. Polling filters
+and pending-transaction history are bounded in-memory state and are not restored
+after restart. `eth_capabilities` reports the actual archive/state window while
+block, transaction, log, and receipt history starts at genesis.
 
 `eth_simulateV1` is read-only and uses sequential state across simulated
 blocks. It supports block/state overrides, moved precompiles, gap-filled empty
@@ -140,6 +143,28 @@ archives, or process restart.
 This is a synthetic Beacon projection, not a consensus client: it does not
 implement BeaconState transitions, Casper FFG, fork choice, P2P, the Engine API,
 or standard CL block import.
+
+### Runtime wallet accounts
+
+`Node.ImportAccount` and `ethertest_importAccount` add an unlocked signer to the
+node's in-memory wallet. The RPC accepts a `0x`-prefixed 32-byte secp256k1
+private key and an optional absolute uint256 balance. Without a balance, import
+does not change the chain. With a balance, import creates the same permanently
+tainted unsafe control block as `ethertest_setBalance` and returns its hash as
+`controlBlockHash`.
+
+Configured mnemonic accounts cannot be removed. Runtime accounts can be
+removed with `Node.RemoveAccount` or `ethertest_removeAccount`; removal only
+withdraws signing authority and leaves balance, nonce, code, and history
+untouched. Runtime membership is not restored by snapshots, checkpoints,
+branches, state archives, or process restart. A persisted balance control block
+survives normally even though its runtime signer does not.
+
+`eth_signTypedData_v4` accepts either an EIP-712 object or its JSON string. If
+`domain.chainId` is present it must match the node; an omitted chain ID is
+allowed. The RPC returns `r || s || v` with the legacy `27/28` recovery byte.
+There are no v3, legacy typed-data, password, lock/unlock, or encrypted-keystore
+variants in this wallet surface.
 
 Not yet release-complete: unsafe header mutation sessions,
 execution request controls (containers are present but queues are empty),
@@ -209,6 +234,16 @@ defer client.Close()
 
 Applications that want node logs can pass a host-owned `*slog.Logger` with
 `ethertest.New(cfg, ethertest.WithLogger(logger))`.
+
+Runtime signers can be managed through the library without exposing keys over
+JSON-RPC:
+
+```go
+result, err := node.ImportAccount(ctx, privateKey, optionalBalance)
+removed, err := node.RemoveAccount(ctx, result.Address)
+```
+
+`result.ControlBlockHash` is nil when no balance was requested.
 
 All public writes pass through one controller. Queries use geth's immutable
 committed headers/state roots and may run concurrently. Persistent namespaces

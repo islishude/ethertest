@@ -29,7 +29,6 @@ type executionChain struct {
 	config               *params.ChainConfig
 	db                   ethdb.Database
 	blockchain           *core.BlockChain
-	accounts             []Account
 	feeRecipient         common.Address
 	slot                 uint64
 	genesisTime          uint64
@@ -95,11 +94,7 @@ func executionChainConfig(cfg Config) *params.ChainConfig {
 	}
 }
 
-func newExecutionChain(cfg *Config) (*executionChain, error) {
-	accounts, err := DeriveAccounts(cfg.Accounts.Mnemonic, cfg.Accounts.Count)
-	if err != nil {
-		return nil, err
-	}
+func newExecutionChain(cfg *Config, accounts []common.Address) (*executionChain, error) {
 	var database ethdb.Database
 	switch cfg.Storage.Engine {
 	case "memory":
@@ -148,8 +143,8 @@ func newExecutionChain(cfg *Config) (*executionChain, error) {
 		_ = database.Close() //nolint:errcheck
 		return nil, err
 	}
-	for _, account := range accounts {
-		genesis.Alloc[account.Address] = types.Account{Balance: new(big.Int).Set(balance)}
+	for _, address := range accounts {
+		genesis.Alloc[address] = types.Account{Balance: new(big.Int).Set(balance)}
 	}
 	engine := beacon.New(ethash.NewFaker())
 	bcCfg := core.DefaultConfig()
@@ -160,7 +155,7 @@ func newExecutionChain(cfg *Config) (*executionChain, error) {
 		_ = database.Close() //nolint:errcheck
 		return nil, err
 	}
-	feeRecipient := accounts[0].Address
+	feeRecipient := accounts[0]
 	if cfg.Mining.FeeRecipient != "" {
 		if !common.IsHexAddress(cfg.Mining.FeeRecipient) {
 			blockchain.Stop()
@@ -186,10 +181,10 @@ func newExecutionChain(cfg *Config) (*executionChain, error) {
 	currentSlot := slotByHash[blockchain.CurrentBlock().Hash()]
 	chain := &executionChain{
 		config: chainConfig, db: database, blockchain: blockchain,
-		accounts: accounts, feeRecipient: feeRecipient,
-		pending: make(map[common.Address]map[uint64]*types.Transaction),
-		arrival: make(map[common.Hash]uint64),
-		blobs:   make(map[common.Hash]*types.BlobTxSidecar), order: cfg.Mining.Order,
+		feeRecipient: feeRecipient,
+		pending:      make(map[common.Address]map[uint64]*types.Transaction),
+		arrival:      make(map[common.Hash]uint64),
+		blobs:        make(map[common.Hash]*types.BlobTxSidecar), order: cfg.Mining.Order,
 		genesisTime: uint64(cfg.Chain.GenesisTime), slotDuration: uint64(cfg.Chain.SlotDuration / time.Second),
 		slot: currentSlot, slotByHash: slotByHash, canonicalBlockBySlot: canonicalBlockBySlot,
 		lastProcessedSlot: currentSlot, timelineComplete: true,

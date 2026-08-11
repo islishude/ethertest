@@ -31,6 +31,7 @@ type commandResult struct {
 type Node struct {
 	cfg                Config
 	chain              *executionChain
+	wallet             *memoryWallet
 	events             *eventLog
 	pendingEvents      *pendingHashLog
 	commands           chan command
@@ -88,7 +89,16 @@ func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
 			apply(&options)
 		}
 	}
-	chain, err := newExecutionChain(&cfg)
+	configuredAccounts, err := DeriveAccounts(cfg.Accounts.Mnemonic, cfg.Accounts.Count)
+	if err != nil {
+		return nil, err
+	}
+	wallet, err := newMemoryWallet(configuredAccounts)
+	if err != nil {
+		return nil, err
+	}
+	configuredAddresses := wallet.accounts()
+	chain, err := newExecutionChain(&cfg, configuredAddresses)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +113,7 @@ func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
 		return nil, err
 	}
 	n := &Node{
-		cfg: cfg, chain: chain, events: events, pendingEvents: newPendingHashLog(cfg.Events.Capacity),
+		cfg: cfg, chain: chain, wallet: wallet, events: events, pendingEvents: newPendingHashLog(cfg.Events.Capacity),
 		commands: make(chan command), stopping: make(chan struct{}), done: make(chan struct{}),
 		snapshots: make(map[uint64]*chainPoint), checkpoints: checkpoints,
 		branches: branches, logger: options.logger,
@@ -114,7 +124,7 @@ func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
 	} else {
 		n.resumeMiningMode = cfg.Mining.Mode
 	}
-	consensus, err := newConsensusModel(cfg, accountsFromChain(chain))
+	consensus, err := newConsensusModel(cfg, configuredAddresses)
 	if err != nil {
 		_ = chain.close()
 		return nil, err
@@ -137,14 +147,6 @@ func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
 		return nil, err
 	}
 	return n, nil
-}
-
-func accountsFromChain(chain *executionChain) []common.Address {
-	addresses := make([]common.Address, len(chain.accounts))
-	for i := range chain.accounts {
-		addresses[i] = chain.accounts[i].Address
-	}
-	return addresses
 }
 
 func (n *Node) Snapshot(ctx context.Context) (uint64, error) {
@@ -614,11 +616,7 @@ func (n *Node) EventsSince(revision Revision) ([]Event, error) {
 }
 
 func (n *Node) Accounts() []common.Address {
-	out := make([]common.Address, len(n.chain.accounts))
-	for i, account := range n.chain.accounts {
-		out[i] = account.Address
-	}
-	return out
+	return n.wallet.accounts()
 }
 
 func (n *Node) Close() error {

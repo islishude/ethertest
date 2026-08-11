@@ -367,7 +367,7 @@ func TestBeta7SigningAndAccessList(t *testing.T) {
 	node := startRPCNode(t, cfg)
 	client := node.RPCClient()
 	defer client.Close()
-	accounts := node.chain.accounts
+	accounts := testWalletAccounts(t, node)
 
 	message := hexutil.Bytes("beta.7")
 	var signature hexutil.Bytes

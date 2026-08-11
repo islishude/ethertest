@@ -11,6 +11,19 @@ Human startup output on stderr includes every unlocked private key. Structured
 logs on stdout, metrics, errors, state manifests, and default state archives
 must never contain private keys, mnemonics, raw transaction data, or
 control-state values. JSON logging suppresses the human startup key banner.
+
+`ethertest_importAccount` accepts a raw private key and therefore is only a
+development convenience. On plaintext HTTP the key is protected only by the
+loopback listener boundary; use the Go API or user-provided TLS when transport
+exposure matters. The request body, typed-data payloads, signatures, balances,
+and imported keys are never logged or persisted. Imported keys remain unlocked
+in process memory until removed or shutdown and are not encrypted.
+
+Configured accounts are protected from runtime removal. Removing an imported
+account deletes only the in-memory signing capability; it does not erase the
+corresponding execution state or history. Importing with a balance creates an
+unsafe control block and permanently taints the session/archive exactly like a
+direct balance override.
 Secret export requires a separate explicit command.
 
 KZG verification is never bypassed. State-control RPC methods create an unsafe

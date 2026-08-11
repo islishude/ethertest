@@ -26,7 +26,6 @@ import (
 	"math/big"
 	"time"
 
-	gethaccounts "github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
@@ -64,23 +63,10 @@ func (args *callArgs) validateData() error {
 	return nil
 }
 
-func (api *ethAPI) unlockedAccount(address common.Address) (*Account, error) {
-	for index := range api.node.chain.accounts {
-		if api.node.chain.accounts[index].Address == address {
-			return &api.node.chain.accounts[index], nil
-		}
-	}
-	return nil, errors.New("unknown unlocked account")
-}
-
 // Sign returns an EIP-191 personal-message signature. The recovery byte is in
 // the legacy 27/28 form required by eth_sign.
 func (api *ethAPI) Sign(address common.Address, message hexutil.Bytes) (hexutil.Bytes, error) {
-	account, err := api.unlockedAccount(address)
-	if err != nil {
-		return nil, err
-	}
-	signature, err := crypto.Sign(gethaccounts.TextHash(message), account.PrivateKey)
+	signature, err := api.node.wallet.signText(address, message)
 	if err != nil {
 		return nil, err
 	}
@@ -103,9 +89,8 @@ func (api *ethAPI) buildAndSignTransaction(ctx context.Context, args callArgs, r
 	if args.From == nil {
 		return nil, errors.New("from is required")
 	}
-	account, err := api.unlockedAccount(*args.From)
-	if err != nil {
-		return nil, err
+	if !api.node.wallet.contains(*args.From) {
+		return nil, errUnknownUnlockedAccount
 	}
 	if err := args.validateData(); err != nil {
 		return nil, err
@@ -160,7 +145,7 @@ func (api *ethAPI) buildAndSignTransaction(ctx context.Context, args callArgs, r
 	if err != nil {
 		return nil, err
 	}
-	signed, err := types.SignTx(unsigned, types.LatestSignerForChainID(chainID), account.PrivateKey)
+	signed, err := api.node.wallet.signTransaction(*args.From, unsigned, chainID)
 	if err != nil {
 		return nil, err
 	}

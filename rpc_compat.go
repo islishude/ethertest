@@ -57,12 +57,7 @@ func (api *personalAPI) ListAccounts() []common.Address {
 }
 
 func (api *personalAPI) UnlockAccount(address common.Address, _ string, _ *hexutil.Uint64) bool {
-	for _, account := range api.node.chain.accounts {
-		if account.Address == address {
-			return true
-		}
-	}
-	return false
+	return api.node.wallet.contains(address)
 }
 
 func (api *personalAPI) SendTransaction(ctx context.Context, args callArgs, _ string) (common.Hash, error) {

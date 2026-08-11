@@ -26,6 +26,40 @@ func testConfig() Config {
 	return cfg
 }
 
+func testWalletAccount(t *testing.T, node *Node, index int) Account {
+	t.Helper()
+	addresses := node.Accounts()
+	if index < 0 || index >= len(addresses) {
+		t.Fatalf("wallet account index %d out of bounds", index)
+	}
+	return testAccountFromWallet(t, node.wallet, addresses[index])
+}
+
+func testAccountFromWallet(t *testing.T, wallet *memoryWallet, address common.Address) Account {
+	t.Helper()
+	wallet.mu.RLock()
+	entry, exists := wallet.entries[address]
+	wallet.mu.RUnlock()
+	if !exists {
+		t.Fatalf("wallet account %s is unavailable", address)
+	}
+	account, err := cloneAccount(entry.account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return account
+}
+
+func testWalletAccounts(t *testing.T, node *Node) []Account {
+	t.Helper()
+	addresses := node.Accounts()
+	accounts := make([]Account, len(addresses))
+	for index := range addresses {
+		accounts[index] = testWalletAccount(t, node, index)
+	}
+	return accounts
+}
+
 func TestExecutionChainConfigIsRepositoryOwnedAndStopsAtOsaka(t *testing.T) {
 	cfg := testConfig()
 	cfg.Chain.Forks.PragueEpoch = 1
@@ -725,7 +759,7 @@ func TestBlockTracingByHashAndNumber(t *testing.T) {
 		t.Fatal("JavaScript tracer unexpectedly accepted for an empty block")
 	}
 
-	account := node.chain.accounts[0]
+	account := testWalletAccount(t, node, 0)
 	first := signedDynamicTransaction(t, cfg, account, 0, node.Accounts()[1], big.NewInt(1), nil)
 	second := signedDynamicTransaction(t, cfg, account, 1, node.Accounts()[2], big.NewInt(2), nil)
 	if _, err := node.SendTransaction(context.Background(), first); err != nil {

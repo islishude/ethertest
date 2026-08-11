@@ -125,7 +125,7 @@ func TestControlLineageAndArchiveSafetyArePermanent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	address := node.chain.accounts[0].Address
+	address := node.Accounts()[0]
 	balance := big.NewInt(123)
 	controlHash, err := node.ApplyControl(context.Background(), ControlChanges{address: {Balance: balance}})
 	if err != nil {
@@ -641,7 +641,7 @@ func TestPendingCumulativeBalanceAndInvalidFrontierIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer node.Close() //nolint:errcheck
-	accounts := node.chain.accounts
+	accounts := testWalletAccounts(t, node)
 	if err := node.CreateBranch(context.Background(), "funded", 0); err != nil {
 		t.Fatal(err)
 	}
@@ -698,8 +698,8 @@ func TestPendingReplacementAndNonceGapClassification(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer node.Close() //nolint:errcheck
-	account := node.chain.accounts[0]
-	recipient := node.chain.accounts[1].Address
+	account := testWalletAccount(t, node, 0)
+	recipient := node.Accounts()[1]
 	sign := func(nonce uint64, tip int64) *types.Transaction {
 		t.Helper()
 		tx, err := types.SignTx(types.NewTx(&types.DynamicFeeTx{
@@ -757,7 +757,7 @@ func TestPendingRPCsShareFrozenCandidateState(t *testing.T) {
 	}
 	defer node.Close() //nolint:errcheck
 
-	account := node.chain.accounts[0]
+	account := testWalletAccount(t, node, 0)
 	contract := crypto.CreateAddress(account.Address, 0)
 	// Store 0x2a in slot zero, then deploy one STOP byte as runtime code.
 	initCode := common.FromHex("0x602a6000556001601160003960016000f300")
@@ -864,7 +864,7 @@ func TestEIP1898ErrorsAcrossStateQueries(t *testing.T) {
 	}
 	client := node.RPCClient()
 	defer client.Close()
-	address := node.chain.accounts[0].Address
+	address := node.Accounts()[0]
 	nonCanonical := map[string]any{"blockHash": hashes[0], "requireCanonical": true}
 	var balance hexutil.Big
 	err = client.Call(&balance, "eth_getBalance", address, nonCanonical)
@@ -958,7 +958,7 @@ func TestMinerStartFromInitialManualModeUsesTransactionAutomining(t *testing.T) 
 	if err := client.Call(&started, "miner_start"); err != nil || !started {
 		t.Fatalf("miner_start = %v, %v", started, err)
 	}
-	tx := signedDynamicTransaction(t, cfg, node.chain.accounts[0], 0, node.chain.accounts[1].Address, big.NewInt(1), nil)
+	tx := signedDynamicTransaction(t, cfg, testWalletAccount(t, node, 0), 0, node.Accounts()[1], big.NewInt(1), nil)
 	if _, err := node.SendTransaction(context.Background(), tx); err != nil {
 		t.Fatal(err)
 	}
@@ -990,7 +990,7 @@ func TestTraceTransactionReplaysPreExecutionSystemCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer node.Close() //nolint:errcheck
-	account := node.chain.accounts[0]
+	account := testWalletAccount(t, node, 0)
 	targetTime := uint64(cfg.Chain.GenesisTime) + uint64(cfg.Chain.SlotDuration/time.Second)
 	beaconInput := common.LeftPadBytes(new(big.Int).SetUint64(targetTime).Bytes(), 32)
 	historyInput := make([]byte, 32)
