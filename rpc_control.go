@@ -15,6 +15,7 @@ func (api *controlAPI) Capabilities() map[string]any {
 		"forkTransitions": []string{"deneb", "electra", "fulu"},
 		"blobCodecs":      []string{"canonical-blob", "packed-bytes-v1"},
 		"p2p":             false, "engineAPI": false, "javascriptTracers": false,
+		"ipc":             true,
 		"releaseComplete": false,
 	}
 }
@@ -83,7 +84,7 @@ func (api *controlAPI) NetworkConfig() map[string]any {
 		"genesisTime":   api.node.cfg.Chain.GenesisTime,
 		"slotDuration":  api.node.cfg.Chain.SlotDuration.String(),
 		"slotsPerEpoch": api.node.cfg.Chain.SlotsPerEpoch,
-		"el":            executionAddress, "beacon": beaconAddress,
+		"el":            executionAddress, "beacon": beaconAddress, "ipc": api.node.cfg.IPCEndpoint(),
 		"consensusMode": "synthetic", "beaconApi": "v4-subset",
 		"fullConsensus": false, "releaseComplete": false,
 	}

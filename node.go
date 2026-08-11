@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,10 @@ type Node struct {
 	rpcServer          *rpc.Server
 	httpServer         *http.Server
 	httpEndpoint       string
+	ipcServer          *rpc.Server
+	ipcListener        net.Listener
+	ipcEndpoint        string
+	ipcStopping        atomic.Bool
 	nextSnapshot       uint64
 	snapshots          map[uint64]*chainPoint
 	checkpoints        map[string]*chainPoint
@@ -283,6 +288,7 @@ func (n *Node) Start() error {
 		"restored", head.Number.Uint64() != 0,
 		"execution_endpoint", endpoints.Execution,
 		"beacon_endpoint", endpoints.Beacon,
+		"ipc_endpoint", endpoints.IPC,
 		"synthetic_finality", true,
 	)
 	if n.cfg.HTTP.Enabled && n.cfg.HTTP.AllowUnsafeExternal && !isLoopbackAddress(n.cfg.HTTP.Address) {
@@ -637,6 +643,16 @@ func (n *Node) Close() error {
 				)
 			}
 		}
+		if ipcErr := n.stopIPC(); ipcErr != nil {
+			if err == nil {
+				err = ipcErr
+			}
+			n.logger.Error("IPC server shutdown failed",
+				"event", "ipc_shutdown_failed",
+				"endpoint", n.ipcEndpoint,
+				"error", ipcErr,
+			)
+		}
 		if n.rpcServer != nil {
 			n.rpcServer.Stop()
 		}
@@ -684,10 +700,11 @@ func (n *Node) RPCClient() *rpc.Client {
 type Endpoints struct {
 	Execution string `json:"execution"`
 	Beacon    string `json:"beacon"`
+	IPC       string `json:"ipc"`
 }
 
 func (n *Node) Endpoints() Endpoints {
-	endpoints := Endpoints{Execution: n.httpEndpoint}
+	endpoints := Endpoints{Execution: n.httpEndpoint, IPC: n.ipcEndpoint}
 	if n.cfg.Beacon.Enabled && n.httpEndpoint != "" {
 		endpoints.Beacon = n.httpEndpoint
 	}

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +25,7 @@ type Config struct {
 	Accounts  AccountsConfig `toml:"accounts"`
 	Mining    MiningConfig   `toml:"mining"`
 	HTTP      ListenerConfig `toml:"http"`
+	IPC       IPCConfig      `toml:"ipc"`
 	Beacon    BeaconConfig   `toml:"beacon"`
 	Storage   StorageConfig  `toml:"storage"`
 	Events    EventsConfig   `toml:"events"`
@@ -79,6 +82,11 @@ type BeaconConfig struct {
 	Enabled bool `toml:"enabled"`
 }
 
+type IPCConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Path    string `toml:"path"`
+}
+
 type StorageConfig struct {
 	Engine  string `toml:"engine"`
 	Path    string `toml:"path"`
@@ -115,6 +123,7 @@ func DefaultConfig() Config {
 		HTTP: ListenerConfig{
 			Enabled: true, Address: "127.0.0.1:8545", CORS: []string{"*"},
 		},
+		IPC:     IPCConfig{Path: "ethertest.ipc"},
 		Beacon:  BeaconConfig{Enabled: true},
 		Storage: StorageConfig{Engine: "memory", Archive: true},
 		Events:  EventsConfig{Capacity: 4096},
@@ -209,6 +218,9 @@ func (c Config) Validate() error {
 	if c.Log.ProgressInterval < time.Second {
 		return errors.New("log.progress_interval must be at least 1s")
 	}
+	if c.IPC.Enabled && c.IPC.Path == "" {
+		return errors.New("ipc.path is required when IPC is enabled")
+	}
 	if c.Beacon.Enabled && !c.HTTP.Enabled {
 		return errors.New("beacon.enabled requires http.enabled")
 	}
@@ -231,6 +243,28 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// IPCEndpoint resolves the configured socket or named-pipe endpoint. A simple
+// name follows geth semantics: it is placed in persistent storage when one is
+// configured, otherwise in the system temporary directory.
+func (c Config) IPCEndpoint() string {
+	if !c.IPC.Enabled || c.IPC.Path == "" {
+		return ""
+	}
+	if runtime.GOOS == "windows" {
+		if strings.HasPrefix(c.IPC.Path, `\\.\pipe\`) {
+			return c.IPC.Path
+		}
+		return `\\.\pipe\` + c.IPC.Path
+	}
+	if filepath.Base(c.IPC.Path) != c.IPC.Path {
+		return c.IPC.Path
+	}
+	if c.Storage.Engine == "pebble" && c.Storage.Path != "" {
+		return filepath.Join(c.Storage.Path, c.IPC.Path)
+	}
+	return filepath.Join(os.TempDir(), c.IPC.Path)
 }
 
 func isLoopbackAddress(address string) bool {
@@ -309,6 +343,8 @@ func applyEnv(c *Config) error {
 		{"HTTP_CORS", func(v string) error { c.HTTP.CORS = strings.Split(v, ","); return nil }},
 		{"HTTP_TLS_CERT_FILE", func(v string) error { c.HTTP.TLS.CertFile = v; return nil }},
 		{"HTTP_TLS_KEY_FILE", func(v string) error { c.HTTP.TLS.KeyFile = v; return nil }},
+		{"IPC_ENABLED", boolean(&c.IPC.Enabled)},
+		{"IPC_PATH", func(v string) error { c.IPC.Path = v; return nil }},
 		{"BEACON_ENABLED", boolean(&c.Beacon.Enabled)},
 		{"ALLOW_UNSAFE_EXTERNAL", func(v string) error {
 			n, err := strconv.ParseBool(v)

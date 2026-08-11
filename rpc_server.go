@@ -10,36 +10,63 @@ import (
 )
 
 func (n *Node) startServers() error {
-	server := rpc.NewServer()
-	server.SetBatchLimits(n.cfg.Limits.MaxBatchItems, int(n.cfg.Limits.MaxResponseBytes))
 	ethService := &ethAPI{node: n, filters: make(map[rpc.ID]*installedFilter)}
-	services := []struct {
-		namespace string
-		service   any
-	}{
-		{"eth", ethService},
-		{"net", &netAPI{n}},
-		{"web3", &web3API{}},
-		{"txpool", &txpoolAPI{n}},
-		{"miner", &minerAPI{n}},
-		{"debug", &debugAPI{n}},
-		{"personal", &personalAPI{n}},
-		{"ethertest", &controlAPI{n}},
-		{"ethertest", &walletAPI{n}},
-		{"ethertest", &withdrawalAPI{n}},
-		{"anvil", &controlAPI{n}},
-		{"evm", &controlAPI{n}},
+	apis := []rpc.API{
+		{Namespace: "eth", Service: ethService},
+		{Namespace: "net", Service: &netAPI{n}},
+		{Namespace: "web3", Service: &web3API{}},
+		{Namespace: "txpool", Service: &txpoolAPI{n}},
+		{Namespace: "miner", Service: &minerAPI{n}},
+		{Namespace: "debug", Service: &debugAPI{n}},
+		{Namespace: "personal", Service: &personalAPI{n}},
+		{Namespace: "ethertest", Service: &controlAPI{n}},
+		{Namespace: "ethertest", Service: &walletAPI{n}},
+		{Namespace: "ethertest", Service: &withdrawalAPI{n}},
+		{Namespace: "anvil", Service: &controlAPI{n}},
+		{Namespace: "evm", Service: &controlAPI{n}},
 	}
-	for _, service := range services {
-		if err := server.RegisterName(service.namespace, service.service); err != nil {
+	server, err := n.newRPCServer(apis)
+	if err != nil {
+		return err
+	}
+	n.rpcServer = server
+	if n.cfg.IPC.Enabled {
+		endpoint := n.cfg.IPCEndpoint()
+		ipcServer, err := n.newRPCServer(apis)
+		if err != nil {
 			server.Stop()
 			return err
 		}
+		listener, err := listenIPC(endpoint)
+		if err != nil {
+			ipcServer.Stop()
+			server.Stop()
+			n.logger.Error("IPC server failed to start",
+				"event", "ipc_server_start_failed",
+				"endpoint", endpoint,
+				"error", err,
+			)
+			return err
+		}
+		n.ipcListener, n.ipcServer, n.ipcEndpoint = listener, ipcServer, endpoint
+		n.ipcStopping.Store(false)
+		go func() {
+			serveErr := ipcServer.ServeListener(listener)
+			if serveErr != nil && !n.ipcStopping.Load() {
+				n.logger.Error("IPC server failed",
+					"event", "ipc_server_failed",
+					"endpoint", endpoint,
+					"error", serveErr,
+				)
+				n.stopSignal.Do(func() { close(n.stopping) })
+			}
+		}()
+		n.logger.Info("IPC endpoint opened", "event", "ipc_endpoint_opened", "endpoint", endpoint)
 	}
-	n.rpcServer = server
 	if n.cfg.HTTP.Enabled {
 		listener, err := net.Listen("tcp", n.cfg.HTTP.Address)
 		if err != nil {
+			_ = n.stopIPC()
 			server.Stop()
 			return err
 		}
@@ -83,6 +110,40 @@ func (n *Node) startServers() error {
 		}()
 	}
 	return nil
+}
+
+func (n *Node) newRPCServer(apis []rpc.API) (*rpc.Server, error) {
+	server := rpc.NewServer()
+	server.SetBatchLimits(n.cfg.Limits.MaxBatchItems, int(n.cfg.Limits.MaxResponseBytes))
+	for _, api := range apis {
+		if err := server.RegisterName(api.Namespace, api.Service); err != nil {
+			server.Stop()
+			return nil, err
+		}
+	}
+	return server, nil
+}
+
+func (n *Node) stopIPC() error {
+	if n.ipcListener == nil && n.ipcServer == nil {
+		return nil
+	}
+	endpoint := n.ipcEndpoint
+	n.ipcStopping.Store(true)
+	var err error
+	if n.ipcListener != nil {
+		err = n.ipcListener.Close()
+		if errors.Is(err, net.ErrClosed) {
+			err = nil
+		}
+		n.ipcListener = nil
+	}
+	if n.ipcServer != nil {
+		n.ipcServer.Stop()
+		n.ipcServer = nil
+	}
+	n.logger.Info("IPC endpoint closed", "event", "ipc_endpoint_closed", "endpoint", endpoint)
+	return err
 }
 
 func corsHandler(origins []string, maxBytes int64, next http.Handler) http.Handler {

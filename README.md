@@ -1,7 +1,8 @@
 # ethertest
 
-`ethertest` is an embeddable Go local Ethereum test node with both execution
-JSON-RPC and a synthetic Beacon REST/SSE surface. It targets DApps, wallets,
+`ethertest` is an embeddable Go local Ethereum test node with execution
+JSON-RPC over HTTP, WebSocket, in-process, or IPC transports and a synthetic
+Beacon REST/SSE surface. It targets DApps, wallets,
 explorers, indexers, and other off-chain applications that need realistic
 cross-layer behavior without P2P or a validator client.
 
@@ -23,6 +24,7 @@ go build -trimpath -o bin/ethertest ./cmd/ethertest
 Defaults:
 
 - EL HTTP+WS and Beacon REST+SSE: `http://127.0.0.1:8545`
+- IPC: disabled; when enabled its default name is `ethertest.ipc`
 - Beacon API paths start at `http://127.0.0.1:8545/eth/`
 - chain/network ID: `1337` (matching `geth --dev`)
 - 10 Anvil-compatible accounts with 10,000 ETH each
@@ -71,7 +73,7 @@ The network surface currently includes:
 - Core `eth`, `net`, `web3`, `txpool`, `miner`, `personal`, and `debug` methods.
 - An in-memory wallet for configured and runtime-imported signers, including
   `eth_signTypedData_v4` and `ethertest_importAccount`/`ethertest_removeAccount`.
-- EIP-1186 proofs, state overrides, polling filters, `newHeads`, HTTP/WS batch,
+- EIP-1186 proofs, state overrides, polling filters, `newHeads`, HTTP/WS/IPC batch,
   struct logging, `debug_traceBlockByHash`, `debug_traceBlockByNumber`, and
   native Go tracers. JavaScript tracers are rejected.
 - One immutable pending candidate view shared by pending block/state/call/proof
@@ -193,7 +195,29 @@ require explicit `--allow-unsafe-external`. TLS only uses user-provided
 certificate/key pairs and never modifies a trust store.
 Beacon exposes only an `enabled` setting and inherits the shared HTTP address,
 CORS, TLS, request limits, and unsafe-external policy. Disabling HTTP disables
-all network APIs; library configurations cannot enable Beacon without HTTP.
+HTTP, WebSocket, Beacon REST, and Beacon SSE; IPC remains independently
+available. Library configurations cannot enable Beacon without HTTP.
+
+IPC is opt-in. Enable it with `[ipc] enabled = true`,
+`ETHERTEST_IPC_ENABLED=true`, or `--ipc PATH`; use `--no-ipc` to override an
+earlier configuration layer. `ipc.path` defaults to `ethertest.ipc`. On Unix, a
+simple name is placed under `storage.path` for Pebble nodes or the system
+temporary directory for in-memory nodes, while a path containing a directory
+is used exactly as supplied. Windows maps the configured name to a named pipe.
+Unix sockets are created with mode `0600`. `ethertest network --json` reports
+the resolved endpoint in its `ipc` field.
+
+An IPC-only CLI node can be started with:
+
+```sh
+ethertest --no-http --ipc /tmp/ethertest.ipc
+```
+
+For containers, set `--ipc` to a path in a bind-mounted writable directory.
+Because the image runs as nonroot, create that host directory for UID/GID
+`65532` and mount the directory rather than an individual socket file, for
+example `--ipc /run/ethertest/ethertest.ipc` with a bind mount at
+`/run/ethertest`.
 
 ### Logging
 
@@ -222,6 +246,8 @@ mnemonics, raw transaction data, or control-state values.
 cfg := ethertest.DefaultConfig()
 cfg.HTTP.Enabled = false
 cfg.Beacon.Enabled = false
+cfg.IPC.Enabled = true
+cfg.IPC.Path = "/tmp/ethertest.ipc"
 
 node, err := ethertest.New(cfg)
 if err != nil { /* handle */ }
@@ -231,6 +257,9 @@ defer node.Close()
 client := node.RPCClient()
 defer client.Close()
 ```
+
+`RPCClient` remains an in-process client. External clients can connect to
+`node.Endpoints().IPC` with geth's `rpc.DialIPC` after `Start` returns.
 
 Applications that want node logs can pass a host-owned `*slog.Logger` with
 `ethertest.New(cfg, ethertest.WithLogger(logger))`.

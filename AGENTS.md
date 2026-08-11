@@ -4,7 +4,7 @@
 
 This repository implements `github.com/islishude/ethertest`, an embeddable Go
 local Ethereum test node. Keep changes within the agreed v0.1 scope in
-`README.md`: no remote fork, EL/CL P2P, Engine API, GraphQL, IPC, JavaScript
+`README.md`: no remote fork, EL/CL P2P, Engine API, GraphQL, JavaScript
 tracers, validator-client integration, or production-scale claims.
 
 The current version is an alpha. Do not tag or describe it as release-complete
@@ -56,13 +56,12 @@ closed with test evidence.
 Run formatting and the checks relevant to the change:
 
 ```sh
-gofmt -w *.go cmd/ethertest/*.go
-go test ./...
-go vet ./...
+gofmt -w [path ...]
 go test -race ./...
+golangci-lint run
 ```
 
-Use the cgo-enabled `go test ./...` for normal changes; run the secp256k1 cgo
+Use `go test ./...` for normal changes; run the secp256k1 cgo
 backend assertion and race gate for concurrency, persistence, RPC, consensus,
 KZG, container, or release-facing changes. Add a regression test for every
 corrected invariant.

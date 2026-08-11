@@ -3,6 +3,7 @@ package ethertest
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -112,6 +113,66 @@ func TestEnvironmentOverridesAndRejectsUnknownKeys(t *testing.T) {
 	t.Setenv("ETHERTEST_UNKNOWN_SETTING", "1")
 	if _, err := ReadConfig(""); err == nil {
 		t.Fatal("expected unknown ETHERTEST_ key rejection")
+	}
+}
+
+func TestIPCConfigurationDefaultsAndPathResolution(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.IPC.Enabled || cfg.IPC.Path != "ethertest.ipc" || cfg.IPCEndpoint() != "" {
+		t.Fatalf("unexpected IPC defaults: %#v endpoint=%q", cfg.IPC, cfg.IPCEndpoint())
+	}
+
+	cfg.IPC.Enabled = true
+	endpoint := cfg.IPCEndpoint()
+	if runtime.GOOS == "windows" {
+		if endpoint != `\\.\pipe\ethertest.ipc` {
+			t.Fatalf("Windows IPC endpoint = %q", endpoint)
+		}
+	} else if endpoint != filepath.Join(os.TempDir(), "ethertest.ipc") {
+		t.Fatalf("ephemeral IPC endpoint = %q", endpoint)
+	}
+
+	cfg.Storage.Engine = "pebble"
+	cfg.Storage.Path = filepath.Join(t.TempDir(), "data")
+	if runtime.GOOS != "windows" && cfg.IPCEndpoint() != filepath.Join(cfg.Storage.Path, "ethertest.ipc") {
+		t.Fatalf("persistent IPC endpoint = %q", cfg.IPCEndpoint())
+	}
+	explicit := filepath.Join(t.TempDir(), "custom.ipc")
+	cfg.IPC.Path = explicit
+	if runtime.GOOS != "windows" && cfg.IPCEndpoint() != explicit {
+		t.Fatalf("explicit IPC endpoint = %q, want %q", cfg.IPCEndpoint(), explicit)
+	}
+}
+
+func TestIPCConfigurationEnvironmentAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ipc.toml")
+	if err := os.WriteFile(path, []byte("[ipc]\nenabled = true\npath = \"configured.ipc\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fileConfig, err := ReadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fileConfig.IPC.Enabled || fileConfig.IPC.Path != "configured.ipc" {
+		t.Fatalf("IPC TOML configuration not applied: %#v", fileConfig.IPC)
+	}
+
+	t.Setenv("ETHERTEST_IPC_ENABLED", "true")
+	t.Setenv("ETHERTEST_IPC_PATH", "custom.ipc")
+	cfg, err := ReadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.IPC.Enabled || cfg.IPC.Path != "custom.ipc" {
+		t.Fatalf("IPC environment overrides not applied: %#v", cfg.IPC)
+	}
+	cfg.IPC.Path = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected enabled IPC without a path to fail validation")
+	}
+	cfg.IPC.Enabled = false
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("disabled IPC should ignore an empty path: %v", err)
 	}
 }
 

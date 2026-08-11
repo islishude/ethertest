@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/islishude/ethertest"
+	"github.com/urfave/cli/v2"
 )
 
 func TestJSONLoggerEmitsStableFieldsAndHonorsOff(t *testing.T) {
@@ -32,6 +35,49 @@ func TestJSONLoggerEmitsStableFieldsAndHonorsOff(t *testing.T) {
 	if output.Len() != 0 {
 		t.Fatalf("off logger emitted %q", output.String())
 	}
+}
+
+func TestIPCCommandLineConfiguration(t *testing.T) {
+	ipcPath := filepath.Join(t.TempDir(), "cli.ipc")
+	ctx := commandContext(t, "--ipc", ipcPath, "--no-http")
+	cfg, err := effectiveConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.IPC.Enabled || cfg.IPC.Path != ipcPath || cfg.HTTP.Enabled || cfg.Beacon.Enabled {
+		t.Fatalf("unexpected CLI configuration: IPC=%#v HTTP=%#v Beacon=%#v", cfg.IPC, cfg.HTTP, cfg.Beacon)
+	}
+	execution, beacon, ipc := configuredEndpoints(cfg)
+	if execution != "" || beacon != "" || ipc != cfg.IPCEndpoint() {
+		t.Fatalf("configured endpoints = %q, %q, %q", execution, beacon, ipc)
+	}
+
+	t.Setenv("ETHERTEST_IPC_ENABLED", "true")
+	disabled, err := effectiveConfig(commandContext(t, "--no-ipc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.IPC.Enabled {
+		t.Fatal("--no-ipc did not override the environment")
+	}
+
+	if _, err := effectiveConfig(commandContext(t, "--ipc", ipcPath, "--no-ipc")); err == nil {
+		t.Fatal("expected conflicting IPC flags to fail")
+	}
+}
+
+func commandContext(t *testing.T, arguments ...string) *cli.Context {
+	t.Helper()
+	set := flag.NewFlagSet("ethertest-test", flag.ContinueOnError)
+	for _, cliFlag := range commonFlags() {
+		if err := cliFlag.Apply(set); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := set.Parse(arguments); err != nil {
+		t.Fatal(err)
+	}
+	return cli.NewContext(cli.NewApp(), set, nil)
 }
 
 func TestJSONModeSuppressesDevelopmentAccounts(t *testing.T) {

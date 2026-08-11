@@ -82,9 +82,7 @@ func TestMemoryWalletConcurrentAccess(t *testing.T) {
 	hash := crypto.Keccak256([]byte("wallet race test"))
 	var wait sync.WaitGroup
 	for range 8 {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			for range 100 {
 				_ = wallet.accounts()
 				_ = wallet.contains(account.Address)
@@ -93,11 +91,9 @@ func TestMemoryWalletConcurrentAccess(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
-	wait.Add(1)
-	go func() {
-		defer wait.Done()
+	wait.Go(func() {
 		for range 100 {
 			if err := wallet.add(account); err != nil {
 				t.Errorf("concurrent add failed: %v", err)
@@ -108,7 +104,7 @@ func TestMemoryWalletConcurrentAccess(t *testing.T) {
 				return
 			}
 		}
-	}()
+	})
 	wait.Wait()
 }
 

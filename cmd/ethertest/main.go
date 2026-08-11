@@ -47,6 +47,8 @@ func commonFlags() []cli.Flag {
 		&cli.Int64Flag{Name: "genesis-time"},
 		&cli.StringFlag{Name: "http", Usage: "shared HTTP+WS listen address"},
 		&cli.BoolFlag{Name: "no-http"},
+		&cli.StringFlag{Name: "ipc", Usage: "IPC socket or named-pipe path"},
+		&cli.BoolFlag{Name: "no-ipc"},
 		&cli.BoolFlag{Name: "no-beacon"},
 		&cli.BoolFlag{Name: "allow-unsafe-external"},
 		&cli.StringFlag{Name: "data-dir", Usage: "enable Pebble at this directory"},
@@ -58,6 +60,9 @@ func commonFlags() []cli.Flag {
 }
 
 func effectiveConfig(ctx *cli.Context) (ethertest.Config, error) {
+	if ctx.IsSet("ipc") && ctx.Bool("no-ipc") {
+		return ethertest.Config{}, errors.New("--ipc and --no-ipc cannot be used together")
+	}
 	cfg, err := ethertest.ReadConfig(ctx.String("config"))
 	if err != nil {
 		return ethertest.Config{}, err
@@ -73,6 +78,12 @@ func effectiveConfig(ctx *cli.Context) (ethertest.Config, error) {
 	}
 	if ctx.Bool("no-http") {
 		cfg.HTTP.Enabled, cfg.Beacon.Enabled = false, false
+	}
+	if ctx.IsSet("ipc") {
+		cfg.IPC.Enabled, cfg.IPC.Path = true, ctx.String("ipc")
+	}
+	if ctx.Bool("no-ipc") {
+		cfg.IPC.Enabled = false
 	}
 	if ctx.Bool("no-beacon") {
 		cfg.Beacon.Enabled = false
@@ -177,11 +188,11 @@ func networkCommand() *cli.Command {
 		if err != nil {
 			return err
 		}
-		executionEndpoint, beaconEndpoint := configuredEndpoints(cfg)
+		executionEndpoint, beaconEndpoint, ipcEndpoint := configuredEndpoints(cfg)
 		value := map[string]any{
 			"chainId": cfg.Chain.ChainID, "networkId": cfg.Chain.NetworkID,
 			"genesisTime": cfg.Chain.GenesisTime, "fork": "osaka/fulu",
-			"execution": executionEndpoint, "consensus": beaconEndpoint,
+			"execution": executionEndpoint, "consensus": beaconEndpoint, "ipc": ipcEndpoint,
 			"syntheticFinality": true, "consensusMode": "synthetic",
 			"beaconApi": "v4-subset", "fullConsensus": false, "releaseComplete": false,
 		}
@@ -189,14 +200,15 @@ func networkCommand() *cli.Command {
 	}}
 }
 
-func configuredEndpoints(cfg ethertest.Config) (string, string) {
+func configuredEndpoints(cfg ethertest.Config) (string, string, string) {
+	ipcEndpoint := cfg.IPCEndpoint()
 	if !cfg.HTTP.Enabled {
-		return "", ""
+		return "", "", ipcEndpoint
 	}
 	if !cfg.Beacon.Enabled {
-		return cfg.HTTP.Address, ""
+		return cfg.HTTP.Address, "", ipcEndpoint
 	}
-	return cfg.HTTP.Address, cfg.HTTP.Address
+	return cfg.HTTP.Address, cfg.HTTP.Address, ipcEndpoint
 }
 
 func blobCommand() *cli.Command {
@@ -376,6 +388,7 @@ func capabilitiesCommand() *cli.Command {
 			"syntheticFinality": true, "blobCodec": []string{"canonical-blob", "packed-bytes-v1"},
 			"consensusMode": "synthetic", "beaconApi": "v4-subset", "fullConsensus": false,
 			"forkTransitions": []string{"deneb", "electra", "fulu"},
+			"ipc":             true,
 			"releaseComplete": false,
 		})
 	}}

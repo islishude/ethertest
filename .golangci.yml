@@ -12,6 +12,10 @@ linters:
     - modernize
   exclusions:
     generated: strict
+    rules:
+      - linters:
+          - staticcheck
+        text: 'SA1019: .*\.D has been deprecated since Go 1\.26'
 
 formatters:
   enable:

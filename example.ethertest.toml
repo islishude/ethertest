@@ -21,6 +21,10 @@ enabled = true
 address = "127.0.0.1:8545"
 cors = ["*"]
 
+[ipc]
+enabled = false
+path = "ethertest.ipc"
+
 [beacon]
 enabled = true
 
