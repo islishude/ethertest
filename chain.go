@@ -375,11 +375,20 @@ func (c *executionChain) transactionBefore(left, right *types.Transaction) bool 
 	return left.Hash().Hex() < right.Hash().Hex()
 }
 
-func (c *executionChain) buildBlock(slotDuration uint64, empty bool, parentBeaconRoot common.Hash) (block *types.Block, receipts types.Receipts, targetSlot uint64, err error) {
+func (c *executionChain) buildBlock(
+	slotDuration uint64,
+	empty bool,
+	parentBeaconRoot common.Hash,
+	withdrawalRequests []WithdrawalRequest,
+) (block *types.Block, receipts types.Receipts, targetSlot uint64, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	parentHeader := c.blockchain.CurrentBlock()
 	parent := c.blockchain.GetBlock(parentHeader.Hash(), parentHeader.Number.Uint64())
+	withdrawals, err := assignedWithdrawals(c.blockchain, parent, withdrawalRequests)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	txs, err := c.executableTransactions()
 	if err != nil {
 		return nil, nil, 0, err
@@ -390,7 +399,7 @@ func (c *executionChain) buildBlock(slotDuration uint64, empty bool, parentBeaco
 	targetSlot = c.slot + 1
 	targetTime := c.genesisTime + targetSlot*slotDuration
 	if len(txs) == 0 {
-		block, receipts, err = c.generateBlock(parent, targetTime, parentBeaconRoot, nil)
+		block, receipts, err = c.generateBlock(parent, targetTime, parentBeaconRoot, nil, withdrawals)
 		return block, receipts, targetSlot, err
 	}
 	// Build the candidate incrementally. A transaction that became invalid after
@@ -408,17 +417,23 @@ func (c *executionChain) buildBlock(slotDuration uint64, empty bool, parentBeaco
 			continue
 		}
 		trial := append(append(make([]*types.Transaction, 0, len(accepted)+1), accepted...), tx)
-		if _, _, trialErr := c.generateBlock(parent, targetTime, parentBeaconRoot, trial); trialErr != nil {
+		if _, _, trialErr := c.generateBlock(parent, targetTime, parentBeaconRoot, trial, withdrawals); trialErr != nil {
 			blocked[from] = struct{}{}
 			continue
 		}
 		accepted = trial
 	}
-	block, receipts, err = c.generateBlock(parent, targetTime, parentBeaconRoot, accepted)
+	block, receipts, err = c.generateBlock(parent, targetTime, parentBeaconRoot, accepted, withdrawals)
 	return block, receipts, targetSlot, err
 }
 
-func (c *executionChain) generateBlock(parent *types.Block, targetTime uint64, parentBeaconRoot common.Hash, txs []*types.Transaction) (block *types.Block, receipts types.Receipts, err error) {
+func (c *executionChain) generateBlock(
+	parent *types.Block,
+	targetTime uint64,
+	parentBeaconRoot common.Hash,
+	txs []*types.Transaction,
+	withdrawals types.Withdrawals,
+) (block *types.Block, receipts types.Receipts, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("block generation failed: %v", recovered)
@@ -430,12 +445,14 @@ func (c *executionChain) generateBlock(parent *types.Block, targetTime uint64, p
 		gen.SetPoS()
 		gen.SetCoinbase(c.feeRecipient)
 		gen.SetParentBeaconRoot(parentBeaconRoot)
+		addWithdrawals(gen, withdrawals)
 		for _, tx := range txs {
 			gen.AddTxWithChain(c.blockchain, tx.WithoutBlobTxSidecar())
 		}
 	})
 	block = blocks[0]
 	receipts = receiptSets[0]
+	block = replaceGeneratedWithdrawals(block, receipts, withdrawals)
 	return block, receipts, nil
 }
 

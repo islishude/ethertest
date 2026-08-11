@@ -60,7 +60,8 @@ Fork-dependent blocks use
 The library exposes `Config`, `Node`, in-process RPC clients, endpoint discovery,
 transaction submission, manual mining, missed slots, snapshots, persistent
 repeatable checkpoints, persistent explicit branches, canonical switching,
-bounded persistent event replay, safety queries, and atomic state archives.
+bounded persistent event replay, next-block withdrawal injection, safety
+queries, and atomic state archives.
 Clean histories can be replayed by geth's execution state processor. State
 control methods deliberately create unsafe fixtures; the control block, every
 descendant, its branches, and the containing session/archive remain tainted.
@@ -73,6 +74,8 @@ The network surface currently includes:
   native Go tracers. JavaScript tracers are rejected.
 - One immutable pending candidate view shared by pending block/state/call/proof
   queries, with deterministic executable/queued classification.
+- `Node.AddWithdrawal` and `ethertest_addWithdrawal` for adding up to 16
+  automatically indexed EIP-4895 withdrawals to the next canonical block.
 - Type-3 raw submission with mandatory KZG validation, Deneb JSON/SSZ sidecars,
   Osaka cell proofs, `packed-bytes-v1`, stable blob retrieval, and Fulu data
   columns.
@@ -123,13 +126,24 @@ duration. Its fixed v0.1 limits are 256 output blocks, 5,000 calls per
 block, 10,000 calls per request, 50,000,000 cumulative gas, and a five-second
 EVM timeout. Limit exhaustion returns `-38026`; timeout returns `-32016`.
 
+### Next-block withdrawals
+
+`ethertest_addWithdrawal` accepts one object with `validatorIndex`, `address`,
+and nonzero `amount` fields. Integer fields are JSON-RPC quantities and `amount`
+is denominated in Gwei. The node assigns the globally monotonic withdrawal
+`index`, refreshes the pending block and state immediately, and returns `true`
+without triggering mining. The accepted withdrawals are consumed by the next
+canonical block, including an explicitly empty or control block. The in-memory
+queue is limited to 16 entries and is not restored by snapshots, checkpoints,
+archives, or process restart.
+
 This is a synthetic Beacon projection, not a consensus client: it does not
 implement BeaconState transitions, Casper FFG, fork choice, P2P, the Engine API,
 or standard CL block import.
 
 Not yet release-complete: unsafe header mutation sessions,
-execution request and withdrawal queue controls (containers are present but
-queues are empty), finality pause/resume controls, complete RPC compatibility,
+execution request controls (containers are present but queues are empty),
+finality pause/resume controls, complete RPC compatibility,
 generated full upstream API contracts, all official vector suites, encrypted
 secret packages, resource pruning modes, representative-client E2E, and release
 provenance/signing. These remain gates for `v0.1.0`; the current tree must not

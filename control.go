@@ -59,13 +59,18 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 	sessionSafety := chain.sessionSafety()
 	chain.mu.RUnlock()
 	targetTime := chain.genesisTime + targetSlot*chain.slotDuration
-	blocks, _ := core.GenerateChain(chain.config, parent, chain.blockchain.Engine(), chain.db, 1, func(_ int, generator *core.BlockGen) {
+	withdrawals, err := assignedWithdrawals(chain.blockchain, parent, n.pendingWithdrawals)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	blocks, receiptSets := core.GenerateChain(chain.config, parent, chain.blockchain.Engine(), chain.db, 1, func(_ int, generator *core.BlockGen) {
 		generator.OffsetTime(int64(targetTime) - int64(generator.Timestamp()))
 		generator.SetPoS()
 		generator.SetCoinbase(chain.feeRecipientAddress())
 		generator.SetParentBeaconRoot(common.Hash(projection.Root))
+		addWithdrawals(generator, withdrawals)
 	})
-	generated := blocks[0]
+	generated := replaceGeneratedWithdrawals(blocks[0], receiptSets[0], withdrawals)
 	state, err := chain.blockchain.StateAt(generated.Header())
 	if err != nil {
 		return common.Hash{}, err
@@ -150,6 +155,7 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 	}); err != nil {
 		return common.Hash{}, err
 	}
+	n.pendingWithdrawals = nil
 	if err := n.rebuildPendingView(chain); err != nil {
 		n.writeErr = err
 		return common.Hash{}, fmt.Errorf("control block committed but pending view rebuild failed: %w", err)
@@ -249,6 +255,7 @@ func (n *Node) VerifyControlRecord(ctx context.Context, hash common.Hash) (bool,
 			generator.SetPoS()
 			generator.SetCoinbase(block.Coinbase())
 			generator.SetParentBeaconRoot(common.Hash(projection.Root))
+			addWithdrawals(generator, block.Withdrawals())
 		})
 		state, err := chain.blockchain.StateAt(generated[0].Header())
 		if err != nil {

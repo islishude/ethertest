@@ -29,31 +29,32 @@ type commandResult struct {
 }
 
 type Node struct {
-	cfg              Config
-	chain            *executionChain
-	events           *eventLog
-	pendingEvents    *pendingHashLog
-	commands         chan command
-	stopping         chan struct{}
-	done             chan struct{}
-	stopSignal       sync.Once
-	stopOnce         sync.Once
-	running          atomic.Bool
-	rpcServer        *rpc.Server
-	httpServer       *http.Server
-	httpEndpoint     string
-	nextSnapshot     uint64
-	snapshots        map[uint64]*chainPoint
-	checkpoints      map[string]*chainPoint
-	branches         map[string]*branch
-	consensus        *consensusModel
-	logger           *slog.Logger
-	startedAt        time.Time
-	progress         progressReporter
-	miningMu         sync.RWMutex
-	miningMode       string
-	resumeMiningMode string
-	miningChanged    chan struct{}
+	cfg                Config
+	chain              *executionChain
+	events             *eventLog
+	pendingEvents      *pendingHashLog
+	commands           chan command
+	stopping           chan struct{}
+	done               chan struct{}
+	stopSignal         sync.Once
+	stopOnce           sync.Once
+	running            atomic.Bool
+	rpcServer          *rpc.Server
+	httpServer         *http.Server
+	httpEndpoint       string
+	nextSnapshot       uint64
+	snapshots          map[uint64]*chainPoint
+	checkpoints        map[string]*chainPoint
+	branches           map[string]*branch
+	consensus          *consensusModel
+	logger             *slog.Logger
+	startedAt          time.Time
+	progress           progressReporter
+	miningMu           sync.RWMutex
+	miningMode         string
+	resumeMiningMode   string
+	miningChanged      chan struct{}
+	pendingWithdrawals []WithdrawalRequest
 
 	intervalFailure         string
 	intervalFailureLoggedAt time.Time
@@ -340,7 +341,7 @@ func (n *Node) run() {
 			if n.currentMiningMode() != "interval" {
 				continue
 			}
-			if n.chain.pendingCount() == 0 && !n.cfg.Mining.AutoMineEmpty {
+			if n.chain.pendingCount() == 0 && len(n.pendingWithdrawals) == 0 && !n.cfg.Mining.AutoMineEmpty {
 				continue
 			}
 			block, _, err := n.mineExecutionBlock(n.chain, false)
@@ -477,7 +478,7 @@ func (n *Node) mineExecutionBlock(chain *executionChain, empty bool) (*types.Blo
 		return nil, nil, err
 	}
 	block, receipts, targetSlot, err := chain.buildBlock(
-		uint64(n.cfg.Chain.SlotDuration/time.Second), empty, common.Hash(projection.Root),
+		uint64(n.cfg.Chain.SlotDuration/time.Second), empty, common.Hash(projection.Root), n.pendingWithdrawals,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -524,6 +525,7 @@ func (n *Node) mineExecutionBlock(chain *executionChain, empty bool) (*types.Blo
 	}); err != nil {
 		return nil, nil, err
 	}
+	n.pendingWithdrawals = nil
 	if err := n.rebuildPendingView(chain); err != nil {
 		n.writeErr = err
 		return nil, nil, fmt.Errorf("block committed but pending view rebuild failed: %w", err)
@@ -539,7 +541,7 @@ func (n *Node) rebuildPendingView(chain *executionChain) error {
 		return err
 	}
 	block, receipts, _, err := chain.buildBlock(
-		uint64(n.cfg.Chain.SlotDuration/time.Second), false, common.Hash(projection.Root),
+		uint64(n.cfg.Chain.SlotDuration/time.Second), false, common.Hash(projection.Root), n.pendingWithdrawals,
 	)
 	if err != nil {
 		return err

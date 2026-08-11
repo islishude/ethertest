@@ -25,6 +25,7 @@ func (n *Node) startServers() error {
 		{"debug", &debugAPI{n}},
 		{"personal", &personalAPI{n}},
 		{"ethertest", &controlAPI{n}},
+		{"ethertest", &withdrawalAPI{n}},
 		{"anvil", &controlAPI{n}},
 		{"evm", &controlAPI{n}},
 	}
