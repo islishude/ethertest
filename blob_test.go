@@ -151,7 +151,7 @@ func TestOsakaBlobTransactionRejectsBadProofAndMinesValidSidecar(t *testing.T) {
 
 func TestBlobDatabaseFailureLeavesNoPoolResidue(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +195,7 @@ func TestBlobDatabaseFailureLeavesNoPoolResidue(t *testing.T) {
 
 func TestBeaconBlobsFiltersByVersionedHashAndPreservesBlockOrder(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)

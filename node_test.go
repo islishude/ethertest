@@ -259,7 +259,7 @@ func TestRawTransactionRPCIsCastCompatible(t *testing.T) {
 
 func TestSendRawTransactionSyncWaitsAndReturnsStructuredTimeout(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -359,7 +359,7 @@ func assertRPCSenderAndRecipient(t *testing.T, value map[string]any, from, to co
 
 func TestSnapshotIsOneShotAndReorgEventsAreOrdered(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -399,7 +399,7 @@ func TestSnapshotIsOneShotAndReorgEventsAreOrdered(t *testing.T) {
 
 func TestExplicitBranchSwitch(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -433,7 +433,7 @@ func TestExplicitBranchSwitch(t *testing.T) {
 
 func TestMissedSlotsRemainDistinctFromExecutionBlockNumbers(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -467,7 +467,7 @@ func TestMissedSlotsRemainDistinctFromExecutionBlockNumbers(t *testing.T) {
 
 func TestPebbleRestartRetainsCanonicalHead(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	cfg.Events.Capacity = 1
 	cfg.Storage.Engine = "pebble"
 	cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
@@ -528,7 +528,7 @@ func TestPebbleRestartRetainsCanonicalHead(t *testing.T) {
 
 func TestNewHeadsSubscriptionAndSequentialBatch(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -580,7 +580,7 @@ func TestNewHeadsSubscriptionAndSequentialBatch(t *testing.T) {
 
 func TestBeaconSSEStreamsFutureEvents(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	cfg.HTTP.Enabled = true
 	cfg.HTTP.Address = "127.0.0.1:0"
 	cfg.Beacon.Enabled = true
@@ -731,7 +731,7 @@ func TestCallAndNativeTracing(t *testing.T) {
 
 func TestBlockTracingByHashAndNumber(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -836,7 +836,7 @@ func TestBlockTracingByHashAndNumber(t *testing.T) {
 
 func TestVerifiableZeroTransactionControlBlock(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)

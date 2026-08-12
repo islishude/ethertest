@@ -124,7 +124,7 @@ func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
 		branches: branches, logger: options.logger,
 		miningMode: cfg.Mining.Mode, miningChanged: make(chan struct{}, 1),
 	}
-	if cfg.Mining.Mode == "manual" {
+	if cfg.Mining.Mode == miningModeManual {
 		n.resumeMiningMode = "transaction"
 	} else {
 		n.resumeMiningMode = cfg.Mining.Mode
@@ -423,7 +423,7 @@ func (n *Node) currentMiningMode() string {
 func (n *Node) setMiningMode(mode string) {
 	n.miningMu.Lock()
 	n.miningMode = mode
-	if mode != "manual" {
+	if mode != miningModeManual {
 		n.resumeMiningMode = mode
 	}
 	n.miningMu.Unlock()
@@ -460,7 +460,7 @@ func (n *Node) Mine(ctx context.Context, count uint64, empty bool) ([]common.Has
 		if len(hashes) != 0 {
 			n.logger.Info("blocks mined",
 				"event", "blocks_mined",
-				"source", "manual",
+				"source", miningModeManual,
 				"blocks", len(hashes),
 				"transactions", transactions,
 				"first_block", firstNumber,

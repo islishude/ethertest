@@ -17,7 +17,7 @@ import (
 
 func TestWithdrawalQueueUpdatesPendingAndConsumesOnce(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +174,7 @@ func TestAddWithdrawalRPCValidationAndNamespace(t *testing.T) {
 func TestWithdrawalQueueReorgControlAndCommitBoundaries(t *testing.T) {
 	t.Run("reorg recomputes unconsumed index", func(t *testing.T) {
 		cfg := testConfig()
-		cfg.Mining.Mode = "manual"
+		cfg.Mining.Mode = miningModeManual
 		node, err := New(cfg)
 		if err != nil {
 			t.Fatal(err)
@@ -205,7 +205,7 @@ func TestWithdrawalQueueReorgControlAndCommitBoundaries(t *testing.T) {
 
 	t.Run("control block consumes queue", func(t *testing.T) {
 		cfg := testConfig()
-		cfg.Mining.Mode = "manual"
+		cfg.Mining.Mode = miningModeManual
 		node, err := New(cfg)
 		if err != nil {
 			t.Fatal(err)
@@ -235,7 +235,7 @@ func TestWithdrawalQueueReorgControlAndCommitBoundaries(t *testing.T) {
 
 	t.Run("failed commit retains queue", func(t *testing.T) {
 		cfg := testConfig()
-		cfg.Mining.Mode = "manual"
+		cfg.Mining.Mode = miningModeManual
 		node, err := New(cfg)
 		if err != nil {
 			t.Fatal(err)

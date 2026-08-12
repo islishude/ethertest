@@ -92,7 +92,7 @@ func TestBeaconV4BlockContractAndRemovedAliases(t *testing.T) {
 
 func TestBeaconTaintedEnvelopeAndValidatorFilters(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func TestBeaconTaintedEnvelopeAndValidatorFilters(t *testing.T) {
 
 func TestBeaconSSETopicsReplayAndGap(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +185,7 @@ func TestBeaconSSETopicsReplayAndGap(t *testing.T) {
 	}
 
 	gapCfg := testConfig()
-	gapCfg.Mining.Mode = "manual"
+	gapCfg.Mining.Mode = miningModeManual
 	gapCfg.Events.Capacity = 1
 	gapNode, err := New(gapCfg)
 	if err != nil {

@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	DefaultMnemonic = "test test test test test test test test test test test junk"
-	DefaultChainID  = uint64(1337)
+	DefaultMnemonic  = "test test test test test test test test test test test junk"
+	DefaultChainID   = uint64(1337)
+	miningModeManual = "manual"
 )
 
 type Config struct {
@@ -191,7 +192,7 @@ func (c Config) Validate() error {
 	if c.Accounts.Count < 1 || c.Accounts.Count > 1024 {
 		return errors.New("accounts.count must be between 1 and 1024")
 	}
-	if c.Mining.Mode != "transaction" && c.Mining.Mode != "interval" && c.Mining.Mode != "manual" {
+	if c.Mining.Mode != "transaction" && c.Mining.Mode != "interval" && c.Mining.Mode != miningModeManual {
 		return fmt.Errorf("invalid mining.mode %q", c.Mining.Mode)
 	}
 	if c.Mining.Order != "fees" && c.Mining.Order != "fifo" {

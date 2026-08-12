@@ -19,7 +19,7 @@ import (
 func ipcTestConfig(t *testing.T) Config {
 	t.Helper()
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	cfg.IPC.Enabled = true
 	if runtime.GOOS == "windows" {
 		cfg.IPC.Path = "ethertest-test-" + filepath.Base(t.TempDir())

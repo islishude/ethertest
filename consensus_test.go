@@ -173,7 +173,7 @@ func TestBeaconJSONAndSSZContentNegotiation(t *testing.T) {
 
 func TestDenebElectraFuluForkBoundaries(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	cfg.Chain.Forks.PragueEpoch = 1
 	cfg.Chain.Forks.OsakaEpoch = 2
 	node, err := New(cfg)

@@ -44,7 +44,7 @@ func TestNodeEmitsKeyLifecycleAndControlEventsWithoutSecrets(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg, WithLogger(logger))
 	if err != nil {
 		t.Fatal(err)

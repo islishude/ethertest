@@ -110,7 +110,7 @@ func TestMemoryWalletConcurrentAccess(t *testing.T) {
 
 func TestImportAccountLifecycleAndPersistenceBoundary(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	cfg.Storage.Engine = "pebble"
 	cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
 	key := mustGenerateKey(t)

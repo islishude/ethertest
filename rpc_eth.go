@@ -36,7 +36,7 @@ func (api *ethAPI) BlockNumber() hexutil.Uint64 {
 }
 func (api *ethAPI) Accounts() []common.Address { return api.node.Accounts() }
 func (api *ethAPI) Coinbase() common.Address   { return api.node.chain.feeRecipientAddress() }
-func (api *ethAPI) Mining() bool               { return api.node.currentMiningMode() != "manual" }
+func (api *ethAPI) Mining() bool               { return api.node.currentMiningMode() != miningModeManual }
 func (api *ethAPI) Hashrate() hexutil.Uint64   { return 0 }
 func (api *ethAPI) Syncing() bool              { return false }
 func (api *ethAPI) GasPrice() *hexutil.Big {

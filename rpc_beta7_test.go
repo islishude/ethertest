@@ -77,7 +77,7 @@ func TestExecutionAPIBeta7RegistrationAudit(t *testing.T) {
 
 func TestBeta7BlockTransactionStorageAndRawQueries(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node := startRPCNode(t, cfg)
 	client := node.RPCClient()
 	defer client.Close()
@@ -249,7 +249,7 @@ func TestBeta7FeeCapabilitiesAndConfig(t *testing.T) {
 	cfg := testConfig()
 	cfg.Chain.Forks.PragueEpoch = 1
 	cfg.Chain.Forks.OsakaEpoch = 2
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node := startRPCNode(t, cfg)
 	client := node.RPCClient()
 	defer client.Close()
@@ -363,7 +363,7 @@ func TestOldestContiguousState(t *testing.T) {
 
 func TestBeta7SigningAndAccessList(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node := startRPCNode(t, cfg)
 	client := node.RPCClient()
 	defer client.Close()
@@ -518,7 +518,7 @@ func TestBeta7SigningAndAccessList(t *testing.T) {
 
 func TestBeta7PreOsakaBlobSigningAndSubmission(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	cfg.Chain.Forks.PragueEpoch = 0
 	cfg.Chain.Forks.OsakaEpoch = 1
 	node := startRPCNode(t, cfg)
@@ -601,7 +601,7 @@ func TestBeta7PreOsakaBlobSigningAndSubmission(t *testing.T) {
 
 func TestBeta7FiltersAndTxPoolContentFrom(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node := startRPCNode(t, cfg)
 	client := node.RPCClient()
 	defer client.Close()
@@ -691,7 +691,7 @@ func TestBeta7FiltersAndTxPoolContentFrom(t *testing.T) {
 func TestBeta7FilterReorgReplacementAutoMineAndRingGaps(t *testing.T) {
 	t.Run("reorg removed logs precede new canonical logs", func(t *testing.T) {
 		cfg := testConfig()
-		cfg.Mining.Mode = "manual"
+		cfg.Mining.Mode = miningModeManual
 		node := startRPCNode(t, cfg)
 		client := node.RPCClient()
 		defer client.Close()
@@ -750,7 +750,7 @@ func TestBeta7FilterReorgReplacementAutoMineAndRingGaps(t *testing.T) {
 
 	t.Run("pending replacement and transaction automine", func(t *testing.T) {
 		cfg := testConfig()
-		cfg.Mining.Mode = "manual"
+		cfg.Mining.Mode = miningModeManual
 		node := startRPCNode(t, cfg)
 		client := node.RPCClient()
 		defer client.Close()
@@ -803,7 +803,7 @@ func TestBeta7FilterReorgReplacementAutoMineAndRingGaps(t *testing.T) {
 
 	t.Run("block and pending ring gaps are explicit", func(t *testing.T) {
 		cfg := testConfig()
-		cfg.Mining.Mode = "manual"
+		cfg.Mining.Mode = miningModeManual
 		cfg.Events.Capacity = 2
 		node := startRPCNode(t, cfg)
 		client := node.RPCClient()

@@ -30,8 +30,8 @@ func (api *minerAPI) Start(ctx context.Context, _ *int) (bool, error) {
 }
 func (api *minerAPI) Stop(ctx context.Context) (bool, error) {
 	_, err := api.node.execute(ctx, func(_ *executionChain) (any, error) {
-		api.node.setMiningMode("manual")
-		api.node.logger.Info("mining mode changed", "event", "mining_mode_changed", "mode", "manual")
+		api.node.setMiningMode(miningModeManual)
+		api.node.logger.Info("mining mode changed", "event", "mining_mode_changed", "mode", miningModeManual)
 		return nil, nil
 	})
 	return err == nil, err

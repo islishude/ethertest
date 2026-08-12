@@ -38,7 +38,7 @@ func signedDynamicTransaction(t *testing.T, cfg Config, account Account, nonce u
 
 func TestExecutionBlocksReferencePersistedParentBeaconProjection(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +108,7 @@ func TestExecutionBlocksReferencePersistedParentBeaconProjection(t *testing.T) {
 
 func TestControlLineageAndArchiveSafetyArePermanent(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -231,7 +231,7 @@ func TestSafetyQueriesFailClosedWhenMetadataIsUnavailable(t *testing.T) {
 
 func TestPebbleRetainsMissedTailAndCheckpointSlot(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	cfg.Storage.Engine = "pebble"
 	cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
 	first, err := New(cfg)
@@ -279,7 +279,7 @@ func TestPebbleRetainsMissedTailAndCheckpointSlot(t *testing.T) {
 func TestPebbleReusesAutomaticallyResolvedGenesisTime(t *testing.T) {
 	cfg := testConfig()
 	cfg.Chain.GenesisTime = 0
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	cfg.Storage.Engine = "pebble"
 	cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
 	first, err := New(cfg)
@@ -322,7 +322,7 @@ func TestPebbleReusesAutomaticallyResolvedGenesisTime(t *testing.T) {
 
 func TestSameSlotBranchNeverOverwritesCanonicalIndex(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	cfg.Storage.Engine = "pebble"
 	cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
 	first, err := New(cfg)
@@ -374,7 +374,7 @@ func TestSameSlotBranchNeverOverwritesCanonicalIndex(t *testing.T) {
 
 func TestBranchSwitchCannotReplaceSyntheticFinalizedHistory(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -417,7 +417,7 @@ func TestRecoveryJournalBoundaries(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := testConfig()
-			cfg.Mining.Mode = "manual"
+			cfg.Mining.Mode = miningModeManual
 			cfg.Storage.Engine = "pebble"
 			cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
 			first, err := New(cfg)
@@ -510,7 +510,7 @@ func TestOldInPlaceStateWithoutMetadataIsRejected(t *testing.T) {
 func TestPersistedMetadataCorruptionFailsClosed(t *testing.T) {
 	t.Run("projection", func(t *testing.T) {
 		cfg := testConfig()
-		cfg.Mining.Mode = "manual"
+		cfg.Mining.Mode = miningModeManual
 		cfg.Storage.Engine = "pebble"
 		cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
 		node, err := New(cfg)
@@ -541,7 +541,7 @@ func TestPersistedMetadataCorruptionFailsClosed(t *testing.T) {
 
 	t.Run("checkpoint", func(t *testing.T) {
 		cfg := testConfig()
-		cfg.Mining.Mode = "manual"
+		cfg.Mining.Mode = miningModeManual
 		cfg.Storage.Engine = "pebble"
 		cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
 		node, err := New(cfg)
@@ -581,7 +581,7 @@ func TestPersistedMetadataCorruptionFailsClosed(t *testing.T) {
 
 	t.Run("branch", func(t *testing.T) {
 		cfg := testConfig()
-		cfg.Mining.Mode = "manual"
+		cfg.Mining.Mode = miningModeManual
 		cfg.Storage.Engine = "pebble"
 		cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
 		node, err := New(cfg)
@@ -632,7 +632,7 @@ func openTestPebbleDatabase(t *testing.T, path string) ethdb.Database {
 
 func TestPendingCumulativeBalanceAndInvalidFrontierIsolation(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -689,7 +689,7 @@ func TestPendingCumulativeBalanceAndInvalidFrontierIsolation(t *testing.T) {
 
 func TestPendingReplacementAndNonceGapClassification(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -747,7 +747,7 @@ func TestPendingReplacementAndNonceGapClassification(t *testing.T) {
 
 func TestPendingRPCsShareFrozenCandidateState(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -846,7 +846,7 @@ func TestPendingRPCsShareFrozenCandidateState(t *testing.T) {
 
 func TestEIP1898ErrorsAcrossStateQueries(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -940,7 +940,7 @@ func TestMinerStopStartOwnsRuntimeState(t *testing.T) {
 
 func TestMinerStartFromInitialManualModeUsesTransactionAutomining(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -981,7 +981,7 @@ func waitForHead(t *testing.T, node *Node, minimum uint64) {
 
 func TestTraceTransactionReplaysPreExecutionSystemCalls(t *testing.T) {
 	cfg := testConfig()
-	cfg.Mining.Mode = "manual"
+	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)

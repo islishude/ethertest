@@ -157,7 +157,7 @@ func TestLockedEIP4788TimestampSequences(t *testing.T) {
 				t.Fatal("vector requires a positive genesis timestamp")
 			}
 			cfg := testConfig()
-			cfg.Mining.Mode = "manual"
+			cfg.Mining.Mode = miningModeManual
 			cfg.Chain.GenesisTime = int64(test.Start - test.Step)
 			cfg.Chain.SlotDuration = time.Duration(test.Step) * time.Second
 			node, err := New(cfg)
