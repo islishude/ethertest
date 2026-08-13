@@ -29,6 +29,12 @@ func TestNodeLoggingIsOptIn(t *testing.T) {
 	if err := node.Start(); err != nil {
 		t.Fatal(err)
 	}
+	if err := node.PauseFinality(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := node.ResumeFinality(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := node.Mine(context.Background(), 1, true); err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +56,12 @@ func TestNodeEmitsKeyLifecycleAndControlEventsWithoutSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := node.PauseFinality(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := node.ResumeFinality(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := node.Mine(context.Background(), 1, true); err != nil {
@@ -94,6 +106,8 @@ func TestNodeEmitsKeyLifecycleAndControlEventsWithoutSecrets(t *testing.T) {
 	events := loggedEvents(t, output.String())
 	for _, event := range []string{
 		"node_started",
+		"finality_paused",
+		"finality_resumed",
 		"blocks_mined",
 		"chain_reorganized",
 		"snapshot_reverted",

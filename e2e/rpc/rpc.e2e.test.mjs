@@ -559,6 +559,55 @@ rpcTest('HTTP batching, WebSocket newHeads, extensions, and canonical errors are
   await rpcError('eth_getBalance', [zeroAddress, 'not-a-block'], -32602)
 })
 
+rpcTest('synthetic finality pause and resume stays consistent through the real CLI', async () => {
+  const capabilities = await rpc('ethertest_capabilities')
+  assert.equal(capabilities.finalityControls, true)
+
+  const before = await rpc('ethertest_finalityStatus')
+  assert.equal(before.paused, false)
+  assert.equal(before.current_slot, before.finality_slot)
+  assert.equal(before.consensus_mode, 'synthetic')
+  const safeBefore = await rpc('eth_getBlockByNumber', ['safe', false])
+  const finalizedBefore = await rpc('eth_getBlockByNumber', ['finalized', false])
+  assert.equal(safeBefore.hash, before.safe_block_hash)
+  assert.equal(finalizedBefore.hash, before.finalized_block_hash)
+
+  assert.equal(await rpc('ethertest_pauseFinality'), true)
+  assert.equal(await rpc('ethertest_pauseFinality'), true)
+  const paused = await rpc('ethertest_finalityStatus')
+  assert.equal(paused.paused, true)
+  assert.equal(paused.finality_slot, before.current_slot)
+
+  const missed = await rpc('ethertest_missSlots', ['0x11'])
+  assert.equal(missed.length, 17)
+  await rpc('evm_mine', ['0x1'])
+  const advanced = await rpc('ethertest_finalityStatus')
+  assert.equal(advanced.paused, true)
+  assert(advanced.current_slot > advanced.finality_slot)
+  assert.equal(advanced.safe_block_hash, before.safe_block_hash)
+  assert.equal(advanced.finalized_block_hash, before.finalized_block_hash)
+  assert.equal((await rpc('eth_getBlockByNumber', ['safe', false])).hash, before.safe_block_hash)
+  assert.equal(
+    (await rpc('eth_getBlockByNumber', ['finalized', false])).hash,
+    before.finalized_block_hash,
+  )
+
+  assert.equal(await rpc('ethertest_resumeFinality'), true)
+  assert.equal(await rpc('ethertest_resumeFinality'), true)
+  const resumed = await rpc('ethertest_finalityStatus')
+  assert.equal(resumed.paused, false)
+  assert.equal(resumed.current_slot, resumed.finality_slot)
+  assert.equal((await rpc('eth_getBlockByNumber', ['safe', false])).hash, resumed.safe_block_hash)
+  assert.equal(
+    (await rpc('eth_getBlockByNumber', ['finalized', false])).hash,
+    resumed.finalized_block_hash,
+  )
+
+  await rpcError('ethertest_pauseFinality', [true], -32602)
+  await rpcError('anvil_pauseFinality', [], -32601)
+  await rpcError('evm_finalityStatus', [], -32601)
+})
+
 rpcTest('every locked beta.7 implemented method was called through the proxy', async () => {
   const specification = JSON.parse(await readFile(RPC_SPEC, 'utf8'))
   const expected = specification.methods

@@ -54,6 +54,15 @@ state can be replayed through the complete Ethereum consensus transition.
 The state root, proposer, sync aggregate, and finality resolver are deterministic
 synthetic helpers rather than canonical BeaconState results.
 
+Synthetic finality can be paused independently of block and slot progression.
+The timeline persists the frozen observer slot, and every EL tag, Beacon
+checkpoint, finalized response flag, finalized-checkpoint event, and branch
+finality guard resolves through that same slot. Resuming catches up directly to
+the current slot and publishes at most one latest finalized-checkpoint event.
+Canonical rewinds preserve the paused mode and clamp a future frozen slot to the
+new head so finality never resolves beyond it. Because this state is stored in
+the shared database, Pebble restarts and state archives retain it.
+
 Every execution child uses the persisted root of its parent synthetic Beacon
 block as `parent_beacon_block_root`. Missed slots retain the most recent actual
 Beacon block root. JSON and SSZ are loaded from the same persisted projection.

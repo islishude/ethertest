@@ -62,8 +62,8 @@ Fork-dependent blocks use
 The library exposes `Config`, `Node`, in-process RPC clients, endpoint discovery,
 transaction submission, manual mining, missed slots, snapshots, persistent
 repeatable checkpoints, persistent explicit branches, canonical switching,
-bounded persistent event replay, next-block withdrawal injection, safety
-queries, and atomic state archives.
+bounded persistent event replay, synthetic finality pause/resume controls,
+next-block withdrawal injection, safety queries, and atomic state archives.
 Clean histories can be replayed by geth's execution state processor. State
 control methods deliberately create unsafe fixtures; the control block, every
 descendant, its branches, and the containing session/archive remain tainted.
@@ -87,6 +87,8 @@ The network surface currently includes:
   validators/balances,
   Deneb→Electra/Fulu container transitions, synthetic finality, JSON/SSZ
   negotiation, required-topic standard SSE replay, and structured errors.
+- `Node.PauseFinality`, `Node.ResumeFinality`, `Node.FinalityStatus`, and matching
+  `ethertest_*` RPC controls for persistent synthetic finality fixtures.
 - Memory and Pebble databases; recovery-journaled execution/auxiliary commits;
   checksum-verified, zstd-compressed state archives.
 - `Node.SafetyStatus`, `Node.BlockSafety`, `ethertest_safetyStatus`, and
@@ -146,6 +148,27 @@ This is a synthetic Beacon projection, not a consensus client: it does not
 implement BeaconState transitions, Casper FFG, fork choice, P2P, the Engine API,
 or standard CL block import.
 
+### Synthetic finality controls
+
+`Node.PauseFinality` and `ethertest_pauseFinality` freeze the slot used to
+derive synthetic `safe` and `finalized` checkpoints. Blocks and missed slots
+continue advancing while paused. The frozen projection is shared by EL block
+tags, Beacon finality checkpoints and `finalized` response flags, branch
+protection, and finalized-checkpoint events.
+
+`Node.ResumeFinality` and `ethertest_resumeFinality` immediately catch the
+projection up to the current slot. If the finalized checkpoint changed, one
+event for the latest checkpoint is published. Both operations are idempotent;
+repeated calls do not create events or revisions. `Node.FinalityStatus` and
+`ethertest_finalityStatus` report the current and projection slots plus the
+resolved safe/finalized slots, hashes, and block numbers.
+
+The paused state survives Pebble restart and state archive dump/load. A
+snapshot revert, checkpoint restore, or branch switch does not resume finality;
+rewinding before the frozen slot lowers that slot to the new head. These methods
+are registered only in the `ethertest` namespace, not as `anvil_*` or `evm_*`
+aliases.
+
 ### Runtime wallet accounts
 
 `Node.ImportAccount` and `ethertest_importAccount` add an unlocked signer to the
@@ -170,10 +193,10 @@ variants in this wallet surface.
 
 Not yet release-complete: unsafe header mutation sessions,
 execution request controls (containers are present but queues are empty),
-finality pause/resume controls, complete RPC compatibility,
-generated full upstream API contracts, all official vector suites, encrypted
-secret packages, resource pruning modes, and release provenance/signing. These
-remain gates for `v0.1.0`; the current tree must not be tagged as that release.
+complete RPC compatibility, generated full upstream API contracts, all official
+vector suites, encrypted secret packages, resource pruning modes, and release
+provenance/signing. These remain gates for `v0.1.0`; the current tree must not
+be tagged as that release.
 
 ## CLI
 

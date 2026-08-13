@@ -37,6 +37,7 @@ type web3API struct{}
 type txpoolAPI struct{ node *Node }
 type minerAPI struct{ node *Node }
 type controlAPI struct{ node *Node }
+type finalityAPI struct{ node *Node }
 type withdrawalAPI struct{ node *Node }
 type debugAPI struct{ node *Node }
 type personalAPI struct{ node *Node }

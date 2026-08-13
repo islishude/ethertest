@@ -11,7 +11,8 @@ import (
 func (api *controlAPI) Capabilities() map[string]any {
 	return map[string]any{
 		"version": Version, "status": "alpha", "fork": "osaka/fulu", "syntheticFinality": true,
-		"consensusMode": "synthetic", "beaconApi": "v4-subset", "fullConsensus": false,
+		"finalityControls": true,
+		"consensusMode":    "synthetic", "beaconApi": "v4-subset", "fullConsensus": false,
 		"forkTransitions": []string{"deneb", "electra", "fulu"},
 		"blobCodecs":      []string{"canonical-blob", "packed-bytes-v1"},
 		"p2p":             false, "engineAPI": false, "javascriptTracers": false,

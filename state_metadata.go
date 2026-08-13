@@ -55,6 +55,8 @@ type storedTimeline struct {
 	CurrentSlot       uint64 `json:"current_slot"`
 	LastProcessedSlot uint64 `json:"last_processed_slot"`
 	Complete          bool   `json:"complete"`
+	FinalityPaused    bool   `json:"finality_paused,omitempty"`
+	FinalitySlot      uint64 `json:"finality_slot,omitempty"`
 }
 
 type storedSessionSafety struct {
@@ -277,6 +279,8 @@ func loadRuntimeMetadata(chain *executionChain) error {
 	chain.slot = timeline.CurrentSlot
 	chain.lastProcessedSlot = timeline.LastProcessedSlot
 	chain.timelineComplete = timeline.Complete
+	chain.finalityPaused = timeline.FinalityPaused
+	chain.finalitySlot = timeline.FinalitySlot
 
 	chain.canonicalBlockBySlot = make(map[uint64]common.Hash)
 	iterator := chain.db.NewIterator(canonicalSlotPrefix, nil)
@@ -355,6 +359,13 @@ func validateRuntimeMetadata(chain *executionChain) error {
 	if chain.lastProcessedSlot != chain.slot {
 		return fmt.Errorf("timeline last processed slot %d does not match current slot %d", chain.lastProcessedSlot, chain.slot)
 	}
+	if chain.finalityPaused {
+		if chain.finalitySlot > chain.slot {
+			return fmt.Errorf("paused finality slot %d exceeds current slot %d", chain.finalitySlot, chain.slot)
+		}
+	} else if chain.finalitySlot != 0 {
+		return fmt.Errorf("active finality has stale frozen slot %d", chain.finalitySlot)
+	}
 	head := chain.blockchain.CurrentBlock()
 	headSlot, exists := chain.slotByHash[head.Hash()]
 	if !exists || headSlot > chain.slot {
@@ -422,6 +433,7 @@ func (c *executionChain) timeline() storedTimeline {
 	return storedTimeline{
 		GenesisTime: c.genesisTime, CurrentSlot: c.slot,
 		LastProcessedSlot: c.lastProcessedSlot, Complete: c.timelineComplete,
+		FinalityPaused: c.finalityPaused, FinalitySlot: c.finalitySlot,
 	}
 }
 

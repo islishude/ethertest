@@ -37,6 +37,8 @@ type executionChain struct {
 	canonicalBlockBySlot map[uint64]common.Hash
 	lastProcessedSlot    uint64
 	timelineComplete     bool
+	finalityPaused       bool
+	finalitySlot         uint64
 	blockSafety          map[common.Hash]BlockSafety
 	sessionTainted       bool
 	firstUnsafeBlock     *common.Hash

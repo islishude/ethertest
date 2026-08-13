@@ -184,6 +184,9 @@ func (n *Node) switchCanonical(chain *executionChain, target *types.Block, targe
 	maps.Copy(canonicalSlots, chain.canonicalBlockBySlot)
 	chain.mu.RUnlock()
 	timeline.CurrentSlot, timeline.LastProcessedSlot = targetSlot, targetSlot
+	if timeline.FinalityPaused && timeline.FinalitySlot > targetSlot {
+		timeline.FinalitySlot = targetSlot
+	}
 	timelineMutation, err := timelinePut(timeline)
 	if err != nil {
 		return err
@@ -235,6 +238,7 @@ func (n *Node) switchCanonical(chain *executionChain, target *types.Block, targe
 	}, func() {
 		chain.mu.Lock()
 		chain.slot, chain.lastProcessedSlot = targetSlot, targetSlot
+		chain.finalityPaused, chain.finalitySlot = timeline.FinalityPaused, timeline.FinalitySlot
 		chain.canonicalBlockBySlot = canonicalSlots
 		chain.mu.Unlock()
 	}); err != nil {
