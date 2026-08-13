@@ -1,7 +1,9 @@
-.PHONY: all build test test-race lint generate-check clean
+.PHONY: all build test test-race test-rpc-e2e lint generate-check clean
 
 GO ?= go
 GOLANGCI_LINT ?= golangci-lint
+NPM ?= npm
+RPC_E2E_DIR := e2e/rpc
 
 all: test build
 
@@ -14,6 +16,10 @@ test:
 test-race:
 	$(GO) test -race ./...
 
+test-rpc-e2e: build
+	$(NPM) --prefix $(RPC_E2E_DIR) ci --ignore-scripts
+	RPC_E2E_BINARY=$(CURDIR)/bin/ethertest $(NPM) --prefix $(RPC_E2E_DIR) test
+
 lint:
 	$(GOLANGCI_LINT) run
 
@@ -22,4 +28,4 @@ generate-check:
 
 clean:
 	$(GO) clean -testcache
-	rm -rf bin coverage dist
+	rm -rf bin coverage dist $(RPC_E2E_DIR)/node_modules

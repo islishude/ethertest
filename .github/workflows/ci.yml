@@ -36,3 +36,24 @@ jobs:
           cache: true
       - run: go test -race ./...
       - run: go build ./...
+
+  rpc-e2e:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "stable"
+          cache: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: e2e/rpc/package-lock.json
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+      - run: make test-rpc-e2e

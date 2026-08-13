@@ -172,9 +172,8 @@ Not yet release-complete: unsafe header mutation sessions,
 execution request controls (containers are present but queues are empty),
 finality pause/resume controls, complete RPC compatibility,
 generated full upstream API contracts, all official vector suites, encrypted
-secret packages, resource pruning modes, representative-client E2E, and release
-provenance/signing. These remain gates for `v0.1.0`; the current tree must not
-be tagged as that release.
+secret packages, resource pruning modes, and release provenance/signing. These
+remain gates for `v0.1.0`; the current tree must not be tagged as that release.
 
 ## CLI
 
@@ -292,6 +291,7 @@ go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 ```sh
 make test
 make test-race
+make test-rpc-e2e
 make lint
 make build
 ```
@@ -300,6 +300,15 @@ make build
 the `modernize` analyzer, and `gofmt`. It uses read-only module mode
 so linting cannot rewrite `go.mod` or `go.sum`; CI runs the same pinned tool and
 configuration in a dedicated job.
+
+`make test-rpc-e2e` builds and starts the real CLI on random loopback ports,
+then runs the representative-client JSON-RPC suite against it. The suite
+requires Node.js 24 or newer and Foundry/cast v1.7.1; it installs the lockfile's
+exact viem v2.55.13 dependency with lifecycle scripts disabled. viem typed
+actions and cast typed/raw calls collectively exercise every method marked
+implemented in the locked execution API subset, plus HTTP batching, WebSocket
+`newHeads`, EIP-712, EIP-7702, common local-node controls, and canonical RPC
+errors. CI runs this as a separate blocking Ubuntu job.
 
 Upstream protocol inputs are pinned in `spec.lock`; the consumed minimal/Fulu
 constants and API surface contracts are vendored under `specs/upstream`.

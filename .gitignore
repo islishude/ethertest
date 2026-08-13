@@ -6,3 +6,4 @@
 /.DS_Store
 /ethertest.toml
 /state/
+/e2e/rpc/node_modules/

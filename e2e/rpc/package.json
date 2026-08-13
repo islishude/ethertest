@@ -1,0 +1,14 @@
+{
+  "name": "ethertest-rpc-e2e",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 --test-timeout=120000 rpc.e2e.test.mjs"
+  },
+  "dependencies": {
+    "viem": "2.55.13"
+  }
+}
