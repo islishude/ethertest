@@ -15,9 +15,13 @@ import (
 )
 
 var (
-	errUnknownUnlockedAccount = errors.New("unknown unlocked account")
-	errAccountAlreadyManaged  = errors.New("account is already managed")
-	errConfiguredAccount      = errors.New("configured account cannot be removed")
+	errUnknownUnlockedAccount       = errors.New("unknown unlocked account")
+	errAccountAlreadyManaged        = errors.New("account is already managed")
+	errConfiguredAccount            = errors.New("configured account cannot be removed")
+	errAuthorizationChainIDRequired = errors.New("authorization chainId is required")
+	errAuthorizationChainIDNegative = errors.New("authorization chainId cannot be negative")
+	errAuthorizationChainIDOverflow = errors.New("authorization chainId exceeds uint256")
+	errAuthorizationChainIDMismatch = errors.New("authorization chainId does not match node")
 )
 
 type walletEntry struct {
@@ -143,6 +147,51 @@ func (wallet *memoryWallet) signTransaction(address common.Address, tx *types.Tr
 		return nil, errUnknownUnlockedAccount
 	}
 	return types.SignTx(tx, types.LatestSignerForChainID(chainID), entry.account.PrivateKey)
+}
+
+func (wallet *memoryWallet) signAuthorization(address common.Address, authorization types.SetCodeAuthorization) (types.SetCodeAuthorization, error) {
+	wallet.mu.RLock()
+	defer wallet.mu.RUnlock()
+	entry, exists := wallet.entries[address]
+	if !exists {
+		return types.SetCodeAuthorization{}, errUnknownUnlockedAccount
+	}
+	return types.SignSetCode(entry.account.PrivateKey, authorization)
+}
+
+// AuthorizationRequest is the exact EIP-7702 tuple to sign. Address is the
+// delegation target, including the zero address used to clear a delegation.
+// Callers are responsible for selecting the nonce; signing does not read or
+// mutate execution state.
+type AuthorizationRequest struct {
+	ChainID *big.Int
+	Address common.Address
+	Nonce   uint64
+}
+
+// SignAuthorization signs an EIP-7702 authorization with a configured or
+// runtime-imported account. ChainID must be the node chain ID or zero, the
+// replayable cross-chain value allowed by EIP-7702.
+func (n *Node) SignAuthorization(authority common.Address, request AuthorizationRequest) (types.SetCodeAuthorization, error) {
+	if request.ChainID == nil {
+		return types.SetCodeAuthorization{}, errAuthorizationChainIDRequired
+	}
+	chainID := new(big.Int).Set(request.ChainID)
+	if chainID.Sign() < 0 {
+		return types.SetCodeAuthorization{}, errAuthorizationChainIDNegative
+	}
+	encodedChainID, overflow := uint256.FromBig(chainID)
+	if overflow {
+		return types.SetCodeAuthorization{}, errAuthorizationChainIDOverflow
+	}
+	if chainID.Sign() != 0 && chainID.Cmp(n.chain.config.ChainID) != 0 {
+		return types.SetCodeAuthorization{}, errAuthorizationChainIDMismatch
+	}
+	return n.wallet.signAuthorization(authority, types.SetCodeAuthorization{
+		ChainID: *encodedChainID,
+		Address: request.Address,
+		Nonce:   request.Nonce,
+	})
 }
 
 // ImportAccountResult describes both the new signer and the optional unsafe

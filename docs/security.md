@@ -19,6 +19,13 @@ exposure matters. The request body, typed-data payloads, signatures, balances,
 and imported keys are never logged or persisted. Imported keys remain unlocked
 in process memory until removed or shutdown and are not encrypted.
 
+`ethertest_signAuthorization` can create reusable EIP-7702 delegation
+signatures for any configured or runtime-imported account. Treat access to it as
+access to the unlocked signer. The method accepts only the node chain ID or an
+explicit chain ID of zero; zero authorizations are replayable across chains and
+should be used only when that behavior is intentional. Authorization requests
+and signatures are not logged, persisted, or included in revision events.
+
 Configured accounts are protected from runtime removal. Removing an imported
 account deletes only the in-memory signing capability; it does not erase the
 corresponding execution state or history. Importing with a balance creates an

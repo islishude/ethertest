@@ -72,7 +72,8 @@ The network surface currently includes:
 
 - Core `eth`, `net`, `web3`, `txpool`, `miner`, `personal`, and `debug` methods.
 - An in-memory wallet for configured and runtime-imported signers, including
-  `eth_signTypedData_v4` and `ethertest_importAccount`/`ethertest_removeAccount`.
+  `eth_signTypedData_v4`, standalone EIP-7702 authorization signing, and
+  `ethertest_importAccount`/`ethertest_removeAccount`.
 - EIP-1186 proofs, state overrides, polling filters, `newHeads`, HTTP/WS/IPC batch,
   struct logging, `debug_traceBlockByHash`, `debug_traceBlockByNumber`, and
   native Go tracers. JavaScript tracers are rejected.
@@ -190,6 +191,24 @@ survives normally even though its runtime signer does not.
 allowed. The RPC returns `r || s || v` with the legacy `27/28` recovery byte.
 There are no v3, legacy typed-data, password, lock/unlock, or encrypted-keystore
 variants in this wallet surface.
+
+`Node.SignAuthorization` and `ethertest_signAuthorization` sign an exact
+EIP-7702 authorization tuple with a configured or runtime-imported account. The
+RPC takes the authority address followed by `{chainId,address,nonce}`, where
+`address` is the delegation target, and returns the standard `chainId`,
+`address`, `nonce`, `yParity`, `r`, and `s` object. The target may be zero to
+clear a delegation. The chain ID must match the node or be explicitly zero;
+zero is the replayable cross-chain value defined by EIP-7702.
+
+The signer never derives a nonce or submits a transaction. With viem, use
+`prepareAuthorization` to resolve the chain ID, pending nonce, and
+`executor: "self"` adjustment, then pass that complete tuple to the custom RPC.
+Viem's standard `signAuthorization` action still rejects JSON-RPC accounts, so
+this method is an explicit ethertest extension rather than transparent wallet
+compatibility. Signing does not change execution state, the canonical head,
+events, revisions, snapshots, or archives. No `eth_*`, `anvil_*`, or `evm_*`
+alias is registered. `ethertest_capabilities` advertises
+`authorizationSigning: true`.
 
 Not yet release-complete: unsafe header mutation sessions,
 execution request controls (containers are present but queues are empty),

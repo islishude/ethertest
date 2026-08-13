@@ -10,11 +10,18 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 )
 
 type walletAPI struct{ node *Node }
+
+type authorizationArgs struct {
+	ChainID *hexutil.Big    `json:"chainId"`
+	Address *common.Address `json:"address"`
+	Nonce   *hexutil.Uint64 `json:"nonce"`
+}
 
 func (api *walletAPI) ImportAccount(ctx context.Context, encodedKey string, balance *hexutil.Big) (ImportAccountResult, error) {
 	if !strings.HasPrefix(encodedKey, "0x") {
@@ -37,6 +44,32 @@ func (api *walletAPI) ImportAccount(ctx context.Context, encodedKey string, bala
 
 func (api *walletAPI) RemoveAccount(ctx context.Context, address common.Address) (bool, error) {
 	return api.node.RemoveAccount(ctx, address)
+}
+
+// SignAuthorization signs a complete EIP-7702 authorization tuple. Nonce and
+// chain ID resolution intentionally stay with clients such as viem's
+// prepareAuthorization action, avoiding a read-then-sign race in this method.
+func (api *walletAPI) SignAuthorization(authority common.Address, args authorizationArgs) (types.SetCodeAuthorization, error) {
+	if args.ChainID == nil {
+		return types.SetCodeAuthorization{}, &invalidParamsError{message: errAuthorizationChainIDRequired.Error()}
+	}
+	if args.Address == nil {
+		return types.SetCodeAuthorization{}, &invalidParamsError{message: "authorization address is required"}
+	}
+	if args.Nonce == nil {
+		return types.SetCodeAuthorization{}, &invalidParamsError{message: "authorization nonce is required"}
+	}
+	result, err := api.node.SignAuthorization(authority, AuthorizationRequest{
+		ChainID: new(big.Int).Set((*big.Int)(args.ChainID)),
+		Address: *args.Address,
+		Nonce:   uint64(*args.Nonce),
+	})
+	if errors.Is(err, errAuthorizationChainIDNegative) ||
+		errors.Is(err, errAuthorizationChainIDOverflow) ||
+		errors.Is(err, errAuthorizationChainIDMismatch) {
+		return types.SetCodeAuthorization{}, &invalidParamsError{message: err.Error()}
+	}
+	return result, err
 }
 
 // SignTypedData_v4 signs an EIP-712 payload. Common providers send either the

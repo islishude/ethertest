@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"math/big"
 	"path/filepath"
 	"slices"
@@ -20,6 +21,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
+	"github.com/holiman/uint256"
 )
 
 func TestMemoryWalletOrderingOwnershipAndRemoval(t *testing.T) {
@@ -105,7 +107,191 @@ func TestMemoryWalletConcurrentAccess(t *testing.T) {
 			}
 		}
 	})
+	wait.Go(func() {
+		authorization := types.SetCodeAuthorization{
+			ChainID: *uint256.NewInt(1337),
+			Address: configured[1].Address,
+			Nonce:   1,
+		}
+		for range 100 {
+			signed, err := wallet.signAuthorization(account.Address, authorization)
+			if errors.Is(err, errUnknownUnlockedAccount) {
+				continue
+			}
+			if err != nil {
+				t.Errorf("concurrent authorization signing failed unexpectedly: %v", err)
+				return
+			}
+			authority, err := signed.Authority()
+			if err != nil || authority != account.Address {
+				t.Errorf("concurrent authorization authority = %s, %v", authority, err)
+				return
+			}
+		}
+	})
 	wait.Wait()
+}
+
+func TestSignAuthorizationSemantics(t *testing.T) {
+	cfg := testConfig()
+	cfg.Chain.ChainID = 1337
+	node := startRPCNode(t, cfg)
+	authority := node.Accounts()[0]
+	target := node.Accounts()[1]
+	head := node.chain.blockchain.CurrentBlock().Hash()
+	revision := node.Revision()
+
+	signed, err := node.SignAuthorization(authority, AuthorizationRequest{
+		ChainID: big.NewInt(1337),
+		Address: target,
+		Nonce:   42,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if signed.ChainID.ToBig().Cmp(big.NewInt(1337)) != 0 || signed.Address != target || signed.Nonce != 42 || signed.V > 1 {
+		t.Fatalf("signed authorization = %#v", signed)
+	}
+	recovered, err := signed.Authority()
+	if err != nil || recovered != authority {
+		t.Fatalf("authorization authority = %s, %v", recovered, err)
+	}
+	if node.chain.blockchain.CurrentBlock().Hash() != head || node.Revision() != revision {
+		t.Fatal("authorization signing changed canonical state or revision")
+	}
+
+	replayable, err := node.SignAuthorization(authority, AuthorizationRequest{
+		ChainID: new(big.Int),
+		Address: common.Address{},
+		Nonce:   math.MaxUint64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !replayable.ChainID.IsZero() || replayable.Address != (common.Address{}) || replayable.Nonce != math.MaxUint64 {
+		t.Fatalf("replayable clearing authorization = %#v", replayable)
+	}
+	if recovered, err := replayable.Authority(); err != nil || recovered != authority {
+		t.Fatalf("replayable authorization authority = %s, %v", recovered, err)
+	}
+
+	invalid := []struct {
+		name    string
+		chainID *big.Int
+		want    error
+	}{
+		{name: "missing", want: errAuthorizationChainIDRequired},
+		{name: "negative", chainID: big.NewInt(-1), want: errAuthorizationChainIDNegative},
+		{name: "overflow", chainID: new(big.Int).Lsh(big.NewInt(1), 256), want: errAuthorizationChainIDOverflow},
+		{name: "mismatch", chainID: big.NewInt(1), want: errAuthorizationChainIDMismatch},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := node.SignAuthorization(authority, AuthorizationRequest{ChainID: test.chainID, Address: target})
+			if !errors.Is(err, test.want) {
+				t.Fatalf("error = %v, want %v", err, test.want)
+			}
+		})
+	}
+	if _, err := node.SignAuthorization(common.HexToAddress("0xdead"), AuthorizationRequest{ChainID: big.NewInt(1337), Address: target}); !errors.Is(err, errUnknownUnlockedAccount) {
+		t.Fatalf("unknown authority error = %v", err)
+	}
+
+	key := mustGenerateKey(t)
+	imported := crypto.PubkeyToAddress(key.PublicKey)
+	if _, err := node.ImportAccount(context.Background(), key, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.SignAuthorization(imported, AuthorizationRequest{ChainID: big.NewInt(1337), Address: target}); err != nil {
+		t.Fatalf("runtime authorization signing failed: %v", err)
+	}
+	if removed, err := node.RemoveAccount(context.Background(), imported); err != nil || !removed {
+		t.Fatalf("runtime removal = %v, %v", removed, err)
+	}
+	if _, err := node.SignAuthorization(imported, AuthorizationRequest{ChainID: big.NewInt(1337), Address: target}); !errors.Is(err, errUnknownUnlockedAccount) {
+		t.Fatalf("removed authority error = %v", err)
+	}
+}
+
+func TestSignAuthorizationRPC(t *testing.T) {
+	cfg := testConfig()
+	cfg.Chain.ChainID = 1337
+	node := startRPCNode(t, cfg)
+	client := node.RPCClient()
+	defer client.Close()
+	authority := node.Accounts()[0]
+	target := node.Accounts()[1]
+	args := map[string]any{
+		"chainId": "0x539",
+		"address": target,
+		"nonce":   "0x2a",
+	}
+
+	var raw json.RawMessage
+	if err := client.Call(&raw, "ethertest_signAuthorization", authority, args); err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	wantFields := []string{"address", "chainId", "nonce", "r", "s", "yParity"}
+	if len(fields) != len(wantFields) {
+		t.Fatalf("authorization fields = %v", fields)
+	}
+	for _, name := range wantFields {
+		if _, exists := fields[name]; !exists {
+			t.Fatalf("authorization is missing %q: %s", name, raw)
+		}
+	}
+	var signed types.SetCodeAuthorization
+	if err := json.Unmarshal(raw, &signed); err != nil {
+		t.Fatal(err)
+	}
+	if signed.Address != target || signed.Nonce != 42 || signed.ChainID.ToBig().Cmp(big.NewInt(1337)) != 0 {
+		t.Fatalf("RPC authorization = %#v", signed)
+	}
+	if recovered, err := signed.Authority(); err != nil || recovered != authority {
+		t.Fatalf("RPC authorization authority = %s, %v", recovered, err)
+	}
+	clearingArgs := map[string]any{
+		"chainId": "0x0",
+		"address": common.Address{},
+		"nonce":   "0xffffffffffffffff",
+	}
+	if err := client.Call(&signed, "ethertest_signAuthorization", authority, clearingArgs); err != nil {
+		t.Fatal(err)
+	}
+	if !signed.ChainID.IsZero() || signed.Address != (common.Address{}) || signed.Nonce != math.MaxUint64 {
+		t.Fatalf("RPC clearing authorization = %#v", signed)
+	}
+
+	var capabilities map[string]any
+	if err := client.Call(&capabilities, "ethertest_capabilities"); err != nil {
+		t.Fatal(err)
+	}
+	if capabilities["authorizationSigning"] != true {
+		t.Fatalf("authorization signing capability = %#v", capabilities["authorizationSigning"])
+	}
+
+	invalid := []map[string]any{
+		{"address": target, "nonce": "0x0"},
+		{"chainId": "0x539", "nonce": "0x0"},
+		{"chainId": "0x539", "address": target},
+		{"chainId": "0x1", "address": target, "nonce": "0x0"},
+		{"chainId": "0x1" + strings.Repeat("0", 64), "address": target, "nonce": "0x0"},
+		{"chainId": "0x539", "address": target, "nonce": "0x00"},
+	}
+	for _, input := range invalid {
+		assertRPCErrorCode(t, client.Call(&raw, "ethertest_signAuthorization", authority, input), -32602)
+	}
+	assertRPCErrorCode(t, client.Call(&raw, "ethertest_signAuthorization", authority, args, true), -32602)
+	if err := client.Call(&raw, "ethertest_signAuthorization", common.HexToAddress("0xdead"), args); !strings.Contains(errorString(err), errUnknownUnlockedAccount.Error()) {
+		t.Fatalf("unknown RPC authority error = %v", err)
+	}
+	for _, method := range []string{"eth_signAuthorization", "anvil_signAuthorization", "evm_signAuthorization"} {
+		assertRPCErrorCode(t, client.Call(&raw, method, authority, args), -32601)
+	}
 }
 
 func TestImportAccountLifecycleAndPersistenceBoundary(t *testing.T) {
@@ -267,6 +453,18 @@ func TestWalletManagementRPCAndImportedSigning(t *testing.T) {
 	if err := client.Call(&signature, "eth_signTypedData_v4", address, typedPayload); err != nil {
 		t.Fatalf("imported typed-data signing failed: %v", err)
 	}
+	var authorization types.SetCodeAuthorization
+	authorizationArgs := map[string]any{
+		"chainId": hexutil.EncodeUint64(cfg.Chain.ChainID),
+		"address": node.Accounts()[0],
+		"nonce":   "0x0",
+	}
+	if err := client.Call(&authorization, "ethertest_signAuthorization", address, authorizationArgs); err != nil {
+		t.Fatalf("imported authorization signing failed: %v", err)
+	}
+	if recovered, err := authorization.Authority(); err != nil || recovered != address {
+		t.Fatalf("imported authorization authority = %s, %v", recovered, err)
+	}
 
 	txArgs := map[string]any{
 		"type": "0x2", "from": address, "to": node.Accounts()[0], "nonce": "0x0", "gas": "0x5208",
@@ -316,6 +514,9 @@ func TestWalletManagementRPCAndImportedSigning(t *testing.T) {
 	}
 	if err := client.Call(&signature, "eth_sign", address, message); !strings.Contains(errorString(err), errUnknownUnlockedAccount.Error()) {
 		t.Fatalf("removed signer error = %v", err)
+	}
+	if err := client.Call(&authorization, "ethertest_signAuthorization", address, authorizationArgs); !strings.Contains(errorString(err), errUnknownUnlockedAccount.Error()) {
+		t.Fatalf("removed authorization signer error = %v", err)
 	}
 	for _, method := range []string{"anvil_importAccount", "evm_importAccount", "personal_importAccount"} {
 		var ignored json.RawMessage

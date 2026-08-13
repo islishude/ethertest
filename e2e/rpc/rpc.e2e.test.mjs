@@ -23,7 +23,9 @@ import {
   zeroAddress,
   zeroHash,
 } from 'viem'
+import { prepareAuthorization } from 'viem/actions'
 import { privateKeyToAccount } from 'viem/accounts'
+import { recoverAuthorizationAddress, verifyAuthorization } from 'viem/utils'
 
 const ROOT = resolve(import.meta.dirname, '../..')
 const BINARY = process.env.RPC_E2E_BINARY || resolve(ROOT, 'bin/ethertest')
@@ -410,10 +412,33 @@ rpcTest('viem typed public and wallet actions exercise the canonical RPC path', 
   assert.equal(await publicClient.uninstallFilter({ filter: blockFilter }), true)
   assert.equal(await publicClient.uninstallFilter({ filter: pendingFilter }), true)
 
-  const authorization = await localWalletClient.signAuthorization({
-    account: account1,
+  const preparedAuthorization = await prepareAuthorization(publicClient, {
+    account: account1.address,
     contractAddress: account2,
   })
+  const authorizationRPCArgs = {
+    address: preparedAuthorization.address,
+    chainId: `0x${preparedAuthorization.chainId.toString(16)}`,
+    nonce: `0x${preparedAuthorization.nonce.toString(16)}`,
+  }
+  const rawAuthorization = await rpc('ethertest_signAuthorization', [
+    account1.address,
+    authorizationRPCArgs,
+  ])
+  const authorization = {
+    ...rawAuthorization,
+    chainId: Number(BigInt(rawAuthorization.chainId)),
+    nonce: BigInt(rawAuthorization.nonce),
+    yParity: Number(BigInt(rawAuthorization.yParity)),
+  }
+  assert.equal(
+    await recoverAuthorizationAddress({ authorization }),
+    account1.address,
+  )
+  assert.equal(
+    await verifyAuthorization({ address: account1.address, authorization }),
+    true,
+  )
   const authorizationHash = await localWalletClient.sendTransaction({
     authorizationList: [authorization],
     to: account0.address,
@@ -424,6 +449,64 @@ rpcTest('viem typed public and wallet actions exercise the canonical RPC path', 
   assert.equal(authorizationReceipt.type, 'eip7702')
   assert.equal((await publicClient.getTransaction({ hash: authorizationHash })).type, 'eip7702')
   assert.equal(await publicClient.getCode({ address: account1.address }), `0xef0100${account2.slice(2)}`)
+
+  const selfPrepared = await prepareAuthorization(publicClient, {
+    account: account2,
+    contractAddress: account3,
+    executor: 'self',
+  })
+  assert.equal(BigInt(selfPrepared.nonce), 1n)
+  const rawSelfAuthorization = await rpc('ethertest_signAuthorization', [
+    account2,
+    {
+      address: selfPrepared.address,
+      chainId: `0x${selfPrepared.chainId.toString(16)}`,
+      nonce: `0x${selfPrepared.nonce.toString(16)}`,
+    },
+  ])
+  const selfAuthorization = {
+    ...rawSelfAuthorization,
+    chainId: Number(BigInt(rawSelfAuthorization.chainId)),
+    nonce: BigInt(rawSelfAuthorization.nonce),
+    yParity: Number(BigInt(rawSelfAuthorization.yParity)),
+  }
+  assert.equal(
+    await verifyAuthorization({
+      address: account2,
+      authorization: selfAuthorization,
+    }),
+    true,
+  )
+  const selfWalletClient = createWalletClient({
+    account: account2,
+    chain,
+    transport: http(rpcUrl, { retryCount: 0, timeout: 10_000 }),
+  })
+  const selfAuthorizationHash = await selfWalletClient.sendTransaction({
+    authorizationList: [selfAuthorization],
+    to: account0.address,
+  })
+  await rpc('evm_mine', ['0x1'])
+  assert.equal(
+    (await publicClient.getTransactionReceipt({ hash: selfAuthorizationHash })).status,
+    'success',
+  )
+  assert.equal(await publicClient.getCode({ address: account2 }), `0xef0100${account3.slice(2)}`)
+
+  const authorizationCapabilities = await rpc('ethertest_capabilities')
+  assert.equal(authorizationCapabilities.authorizationSigning, true)
+  await rpcError(
+    'ethertest_signAuthorization',
+    [account1.address, { address: account2, chainId: '0x539' }],
+    -32602,
+  )
+  for (const method of [
+    'eth_signAuthorization',
+    'anvil_signAuthorization',
+    'evm_signAuthorization',
+  ]) {
+    await rpcError(method, [account1.address, authorizationRPCArgs], -32601)
+  }
 })
 
 rpcTest('cast typed commands and raw RPC calls exercise the CLI compatibility path', async () => {
