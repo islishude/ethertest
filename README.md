@@ -63,7 +63,9 @@ The library exposes `Config`, `Node`, in-process RPC clients, endpoint discovery
 transaction submission, manual mining, missed slots, snapshots, persistent
 repeatable checkpoints, persistent explicit branches, canonical switching,
 bounded persistent event replay, synthetic finality pause/resume controls,
-next-block withdrawal injection, safety queries, and atomic state archives.
+next-block withdrawal injection, native Electra execution-request projection,
+persistent execution-request controls, safety queries, and atomic state
+archives.
 Clean histories can be replayed by geth's execution state processor. State
 control methods deliberately create unsafe fixtures; the control block, every
 descendant, its branches, and the containing session/archive remain tainted.
@@ -81,6 +83,10 @@ The network surface currently includes:
   queries, with deterministic executable/queued classification.
 - `Node.AddWithdrawal` and `ethertest_addWithdrawal` for adding up to 16
   automatically indexed EIP-4895 withdrawals to the next canonical block.
+- Native EIP-6110/7002/7251 execution requests from geth plus persistent
+  `Node.Add*Request` and `ethertest_add*Request` control FIFOs. The same typed
+  bytes back EL `requestsHash`, Beacon JSON/SSZ, restart, reorg, and archive
+  behavior.
 - Type-3 raw submission with mandatory KZG validation, Deneb JSON/SSZ sidecars,
   Osaka cell proofs, `packed-bytes-v1`, stable blob retrieval, and Fulu data
   columns.
@@ -144,6 +150,46 @@ without triggering mining. The accepted withdrawals are consumed by the next
 canonical block, including an explicitly empty or control block. The in-memory
 queue is limited to 16 entries and is not restored by snapshots, checkpoints,
 archives, or process restart.
+
+### Electra execution requests
+
+Every Prague-or-later block captures geth's native EIP-6110 deposit logs and
+EIP-7002/EIP-7251 system-contract queue output after its final transaction.
+Native typed bytes are validated strictly against the block `requestsHash`,
+then persisted with the Electra/Fulu Beacon projection. Native-only blocks keep
+normal geth insertion and do not taint their history. The deposit log parser
+uses geth's configured `DepositContractAddress`; contract code at any other
+address is not treated as EIP-6110 output. This surface does not add external
+genesis JSON loading; capture follows whichever genesis state and ChainConfig
+the embedding path supplies.
+
+The Go controls `Node.AddDepositRequest`, `Node.AddWithdrawalRequest`, and
+`Node.AddConsolidationRequest` have matching RPCs:
+
+- `ethertest_addDepositRequest({pubkey, withdrawalCredentials, amount, signature, index})`
+- `ethertest_addWithdrawalRequest({sourceAddress, validatorPubkey, amount})`
+- `ethertest_addConsolidationRequest({sourceAddress, sourcePubkey, targetPubkey})`
+
+RPC integer fields are hex quantities. Fixed byte lengths are checked, while
+validator membership and BLS/BeaconState semantics are intentionally not
+claimed. The persistent FIFO limits are 8192 deposits, 16 withdrawals, and 2
+consolidations. Enqueueing refreshes `pending` without mining; requests may wait
+before Prague, and interval mining advances until the first eligible block.
+
+For each type, native entries precede control entries. Native output consumes
+the protocol capacity first, so controls remain queued when a block is full.
+Only canonical mining consumes controls; canonical rewinds restore consumed
+IDs in FIFO order and retain later pending additions. Native queue state follows
+geth's branch StateDB instead. Queue changes, native and complete typed block
+records, Beacon projection, slots, safety, and events share the prepared-operation
+recovery journal and survive Pebble restart and archive round trips.
+
+Including any control entry changes `requestsHash` without applying the
+corresponding execution contract/log transition. Such a block and all of its
+descendants are therefore permanently unsafe with reason
+`execution-request-control`; Beacon optimistic flags, safety RPCs, and archive
+manifests expose that taint. No `anvil_*` or `evm_*` aliases are registered, and
+the existing EIP-4895 `ethertest_addWithdrawal` queue is independent.
 
 This is a synthetic Beacon projection, not a consensus client: it does not
 implement BeaconState transitions, Casper FFG, fork choice, P2P, the Engine API,
@@ -210,9 +256,8 @@ events, revisions, snapshots, or archives. No `eth_*`, `anvil_*`, or `evm_*`
 alias is registered. `ethertest_capabilities` advertises
 `authorizationSigning: true`.
 
-Not yet release-complete: unsafe header mutation sessions,
-execution request controls (containers are present but queues are empty),
-complete RPC compatibility, generated full upstream API contracts, all official
+Not yet release-complete: unsafe header mutation sessions, complete RPC
+compatibility, generated full upstream API contracts, all official
 vector suites, encrypted secret packages, resource pruning modes, and release
 provenance/signing. These remain gates for `v0.1.0`; the current tree must not
 be tagged as that release.

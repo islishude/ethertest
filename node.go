@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -30,37 +31,38 @@ type commandResult struct {
 }
 
 type Node struct {
-	cfg                Config
-	chain              *executionChain
-	wallet             *memoryWallet
-	events             *eventLog
-	pendingEvents      *pendingHashLog
-	commands           chan command
-	stopping           chan struct{}
-	done               chan struct{}
-	stopSignal         sync.Once
-	stopOnce           sync.Once
-	running            atomic.Bool
-	rpcServer          *rpc.Server
-	httpServer         *http.Server
-	httpEndpoint       string
-	ipcServer          *rpc.Server
-	ipcListener        net.Listener
-	ipcEndpoint        string
-	ipcStopping        atomic.Bool
-	nextSnapshot       uint64
-	snapshots          map[uint64]*chainPoint
-	checkpoints        map[string]*chainPoint
-	branches           map[string]*branch
-	consensus          *consensusModel
-	logger             *slog.Logger
-	startedAt          time.Time
-	progress           progressReporter
-	miningMu           sync.RWMutex
-	miningMode         string
-	resumeMiningMode   string
-	miningChanged      chan struct{}
-	pendingWithdrawals []WithdrawalRequest
+	cfg                      Config
+	chain                    *executionChain
+	wallet                   *memoryWallet
+	events                   *eventLog
+	pendingEvents            *pendingHashLog
+	commands                 chan command
+	stopping                 chan struct{}
+	done                     chan struct{}
+	stopSignal               sync.Once
+	stopOnce                 sync.Once
+	running                  atomic.Bool
+	rpcServer                *rpc.Server
+	httpServer               *http.Server
+	httpEndpoint             string
+	ipcServer                *rpc.Server
+	ipcListener              net.Listener
+	ipcEndpoint              string
+	ipcStopping              atomic.Bool
+	nextSnapshot             uint64
+	snapshots                map[uint64]*chainPoint
+	checkpoints              map[string]*chainPoint
+	branches                 map[string]*branch
+	consensus                *consensusModel
+	logger                   *slog.Logger
+	startedAt                time.Time
+	progress                 progressReporter
+	miningMu                 sync.RWMutex
+	miningMode               string
+	resumeMiningMode         string
+	miningChanged            chan struct{}
+	pendingWithdrawals       []WithdrawalRequest
+	pendingExecutionRequests executionRequestQueue
 
 	intervalFailure         string
 	intervalFailureLoggedAt time.Time
@@ -117,12 +119,18 @@ func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
 		_ = chain.close()
 		return nil, err
 	}
+	executionRequests, err := loadExecutionRequestQueue(chain)
+	if err != nil {
+		_ = chain.close()
+		return nil, err
+	}
 	n := &Node{
 		cfg: cfg, chain: chain, wallet: wallet, events: events, pendingEvents: newPendingHashLog(cfg.Events.Capacity),
 		commands: make(chan command), stopping: make(chan struct{}), done: make(chan struct{}),
 		snapshots: make(map[uint64]*chainPoint), checkpoints: checkpoints,
 		branches: branches, logger: options.logger,
 		miningMode: cfg.Mining.Mode, miningChanged: make(chan struct{}, 1),
+		pendingExecutionRequests: executionRequests,
 	}
 	if cfg.Mining.Mode == miningModeManual {
 		n.resumeMiningMode = "transaction"
@@ -142,6 +150,10 @@ func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
 	if err := validateRuntimeMetadata(chain); err != nil {
 		_ = chain.close()
 		return nil, fmt.Errorf("validate persisted runtime metadata: %w", err)
+	}
+	if err := validateExecutionRequestMetadata(n, chain); err != nil {
+		_ = chain.close()
+		return nil, fmt.Errorf("validate persisted execution request metadata: %w", err)
 	}
 	if err := validateControlMetadata(chain, checkpoints, branches); err != nil {
 		_ = chain.close()
@@ -349,7 +361,8 @@ func (n *Node) run() {
 			if n.currentMiningMode() != "interval" {
 				continue
 			}
-			if n.chain.pendingCount() == 0 && len(n.pendingWithdrawals) == 0 && !n.cfg.Mining.AutoMineEmpty {
+			if n.chain.pendingCount() == 0 && len(n.pendingWithdrawals) == 0 &&
+				n.pendingExecutionRequests.empty() && !n.cfg.Mining.AutoMineEmpty {
 				continue
 			}
 			block, _, err := n.mineExecutionBlock(n.chain, false)
@@ -485,23 +498,40 @@ func (n *Node) mineExecutionBlock(chain *executionChain, empty bool) (*types.Blo
 	if err != nil {
 		return nil, nil, err
 	}
-	block, receipts, targetSlot, err := chain.buildBlock(
+	block, receipts, targetSlot, nativeRequests, err := chain.buildBlock(
 		uint64(n.cfg.Chain.SlotDuration/time.Second), empty, common.Hash(projection.Root), n.pendingWithdrawals,
 	)
 	if err != nil {
 		return nil, nil, err
 	}
-	projectionPut, err := n.consensus.projectionPut(chain, block)
+	prepared, err := prepareExecutionRequestBlock(block, nativeRequests, n.pendingExecutionRequests)
+	if err != nil {
+		return nil, nil, err
+	}
+	block = prepared.Block
+	projectionPut, err := n.consensus.projectionPut(chain, block, prepared.Requests)
+	if err != nil {
+		return nil, nil, err
+	}
+	requestRecordPut, err := executionRequestRecordPut(block.Hash(), prepared.Record)
 	if err != nil {
 		return nil, nil, err
 	}
 	chain.mu.RLock()
 	parentSafety := chain.blockSafety[parent.Hash()]
 	timeline := chain.timeline()
+	sessionSafety := chain.sessionSafety()
 	chain.mu.RUnlock()
 	timeline.CurrentSlot = targetSlot
 	timeline.LastProcessedSlot = targetSlot
-	safety := blockSafetyForChild(parentSafety, block.Hash(), "")
+	unsafeReasons := []string(nil)
+	if prepared.Controlled {
+		unsafeReasons = append(unsafeReasons, taintExecutionRequestControl)
+	}
+	safety := blockSafetyForChild(parentSafety, block.Hash(), unsafeReasons...)
+	if prepared.Controlled {
+		sessionSafety = taintStoredSession(sessionSafety, safety, unsafeReasons...)
+	}
 	timelineMutation, err := timelinePut(timeline)
 	if err != nil {
 		return nil, nil, err
@@ -515,21 +545,46 @@ func (n *Node) mineExecutionBlock(chain *executionChain, empty bool) (*types.Blo
 		TargetNumber: block.NumberU64(), DiscardTargetOnCancel: true,
 		Puts: []journalKV{
 			timelineMutation, blockSlotPut(block.Hash(), targetSlot),
-			canonicalSlotPut(targetSlot, block.Hash()), safetyMutation, projectionPut,
+			canonicalSlotPut(targetSlot, block.Hash()), safetyMutation, projectionPut, requestRecordPut,
 		},
+	}
+	if prepared.Controlled {
+		queueMutation, err := executionRequestQueuePut(prepared.Remaining)
+		if err != nil {
+			return nil, nil, err
+		}
+		sessionMutation, err := sessionSafetyPut(sessionSafety)
+		if err != nil {
+			return nil, nil, err
+		}
+		operation.Puts = append(operation.Puts, queueMutation, sessionMutation)
 	}
 	events := []Event{{Type: "block", Slot: targetSlot, BlockHash: block.Hash(), BlockNumber: block.NumberU64()}}
 	if finalized := n.finalizedEventBetween(timeline.CurrentSlot-1, targetSlot); finalized != nil {
 		events = append(events, *finalized)
 	}
 	if err := n.commitPrepared(chain, operation, events, func() error {
+		if prepared.Controlled {
+			rawdb.WriteBlock(chain.db, block)
+			rawdb.WriteReceipts(chain.db, block.Hash(), block.NumberU64(), receipts)
+			_, setErr := chain.blockchain.SetCanonical(block)
+			return setErr
+		}
 		_, insertErr := chain.blockchain.InsertChain(types.Blocks{block})
 		return insertErr
 	}, func() {
 		chain.applyCanonicalBlock(block, targetSlot)
 		chain.mu.Lock()
 		chain.blockSafety[block.Hash()] = safety
+		if prepared.Controlled {
+			chain.sessionTainted = sessionSafety.Tainted
+			chain.firstUnsafeBlock = cloneHashPointer(sessionSafety.FirstUnsafeBlock)
+			for _, reason := range sessionSafety.Reasons {
+				chain.taintReasons[reason] = struct{}{}
+			}
+		}
 		chain.mu.Unlock()
+		n.pendingExecutionRequests = prepared.Remaining
 	}); err != nil {
 		return nil, nil, err
 	}
@@ -542,23 +597,11 @@ func (n *Node) mineExecutionBlock(chain *executionChain, empty bool) (*types.Blo
 }
 
 func (n *Node) rebuildPendingView(chain *executionChain) error {
-	parentHeader := chain.blockchain.CurrentBlock()
-	parent := chain.blockchain.GetBlock(parentHeader.Hash(), parentHeader.Number.Uint64())
-	projection, err := n.consensus.ensureProjection(chain, parent)
+	candidate, err := n.pendingCandidate(chain, n.pendingExecutionRequests)
 	if err != nil {
 		return err
 	}
-	block, receipts, _, err := chain.buildBlock(
-		uint64(n.cfg.Chain.SlotDuration/time.Second), false, common.Hash(projection.Root), n.pendingWithdrawals,
-	)
-	if err != nil {
-		return err
-	}
-	statedb, err := chain.blockchain.StateAt(block.Header())
-	if err != nil {
-		return err
-	}
-	chain.setPendingView(block, statedb, receipts)
+	chain.setPendingView(candidate.block, candidate.state, candidate.receipts)
 	return nil
 }
 

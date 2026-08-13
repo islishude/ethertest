@@ -75,8 +75,12 @@ func loadProjection(chain *executionChain, hash common.Hash) (*consensusBlock, s
 	return &block, record, true, nil
 }
 
-func (m *consensusModel) projectionRecord(chain *executionChain, block *types.Block) (storedProjection, []byte, error) {
-	signed, err := m.signedBlock(chain, block)
+func (m *consensusModel) projectionRecord(
+	chain *executionChain,
+	block *types.Block,
+	requests *electra.ExecutionRequests,
+) (storedProjection, []byte, error) {
+	signed, err := m.signedBlockWithRequests(chain, block, requests)
 	if err != nil {
 		return storedProjection{}, nil, err
 	}
@@ -110,7 +114,7 @@ func (m *consensusModel) ensureProjection(chain *executionChain, block *types.Bl
 	if block.NumberU64() != 0 {
 		return storedProjection{}, fmt.Errorf("beacon projection for published block %s is missing", block.Hash())
 	}
-	record, encoded, err := m.projectionRecord(chain, block)
+	record, encoded, err := m.projectionRecord(chain, block, nil)
 	if err != nil {
 		return storedProjection{}, err
 	}
@@ -120,8 +124,12 @@ func (m *consensusModel) ensureProjection(chain *executionChain, block *types.Bl
 	return record, nil
 }
 
-func (m *consensusModel) projectionPut(chain *executionChain, block *types.Block) (journalKV, error) {
-	_, encoded, err := m.projectionRecord(chain, block)
+func (m *consensusModel) projectionPut(
+	chain *executionChain,
+	block *types.Block,
+	requests *electra.ExecutionRequests,
+) (journalKV, error) {
+	_, encoded, err := m.projectionRecord(chain, block, requests)
 	if err != nil {
 		return journalKV{}, err
 	}

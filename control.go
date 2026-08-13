@@ -8,14 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"slices"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/holiman/uint256"
 )
@@ -63,12 +61,14 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 	if err != nil {
 		return common.Hash{}, err
 	}
+	var nativeRequests [][]byte
 	blocks, receiptSets := core.GenerateChain(chain.config, parent, chain.blockchain.Engine(), chain.db, 1, func(_ int, generator *core.BlockGen) {
 		generator.OffsetTime(int64(targetTime) - int64(generator.Timestamp()))
 		generator.SetPoS()
 		generator.SetCoinbase(chain.feeRecipientAddress())
 		generator.SetParentBeaconRoot(common.Hash(projection.Root))
 		addWithdrawals(generator, withdrawals)
+		nativeRequests = cloneExecutionRequestBytes(generator.ConsensusLayerRequests())
 	})
 	generated := replaceGeneratedWithdrawals(blocks[0], receiptSets[0], withdrawals)
 	state, err := chain.blockchain.StateAt(generated.Header())
@@ -94,24 +94,30 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 	header.Root = root
 	header.Extra = append([]byte("ethertest-control-v1:"), digest[:10]...)
 	block := generated.WithSeal(header)
-	record, err := rlp.EncodeToBytes([][]byte{metadata, parent.Hash().Bytes()})
+	prepared, err := prepareExecutionRequestBlock(block, nativeRequests, n.pendingExecutionRequests)
 	if err != nil {
 		return common.Hash{}, err
 	}
-	projectionPut, err := n.consensus.projectionPut(chain, block)
+	block = prepared.Block
+	controlRecord, err := rlp.EncodeToBytes([][]byte{metadata, parent.Hash().Bytes()})
 	if err != nil {
 		return common.Hash{}, err
 	}
-	safety := blockSafetyForChild(parentSafety, block.Hash(), taintControlStateOverride)
+	projectionPut, err := n.consensus.projectionPut(chain, block, prepared.Requests)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	requestRecordPut, err := executionRequestRecordPut(block.Hash(), prepared.Record)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	unsafeReasons := []string{taintControlStateOverride}
+	if prepared.Controlled {
+		unsafeReasons = append(unsafeReasons, taintExecutionRequestControl)
+	}
+	safety := blockSafetyForChild(parentSafety, block.Hash(), unsafeReasons...)
 	timeline.CurrentSlot, timeline.LastProcessedSlot = targetSlot, targetSlot
-	sessionSafety.Tainted = true
-	if sessionSafety.FirstUnsafeBlock == nil {
-		sessionSafety.FirstUnsafeBlock = cloneHashPointer(safety.FirstUnsafeBlock)
-	}
-	if !slices.Contains(sessionSafety.Reasons, taintControlStateOverride) {
-		sessionSafety.Reasons = append(sessionSafety.Reasons, taintControlStateOverride)
-		slices.Sort(sessionSafety.Reasons)
-	}
+	sessionSafety = taintStoredSession(sessionSafety, safety, unsafeReasons...)
 	timelineMutation, err := timelinePut(timeline)
 	if err != nil {
 		return common.Hash{}, err
@@ -128,10 +134,17 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 		Kind: "head", OldHead: parent.Hash(), NewHead: block.Hash(),
 		TargetNumber: block.NumberU64(), DiscardTargetOnCancel: true,
 		Puts: []journalKV{
-			{Key: append(append([]byte(nil), controlNamespace...), block.Hash().Bytes()...), Value: record},
+			{Key: append(append([]byte(nil), controlNamespace...), block.Hash().Bytes()...), Value: controlRecord},
 			timelineMutation, blockSlotPut(block.Hash(), targetSlot),
-			canonicalSlotPut(targetSlot, block.Hash()), safetyMutation, sessionMutation, projectionPut,
+			canonicalSlotPut(targetSlot, block.Hash()), safetyMutation, sessionMutation, projectionPut, requestRecordPut,
 		},
+	}
+	if prepared.Controlled {
+		queueMutation, err := executionRequestQueuePut(prepared.Remaining)
+		if err != nil {
+			return common.Hash{}, err
+		}
+		operation.Puts = append(operation.Puts, queueMutation)
 	}
 	events := []Event{{Type: "control_block", Slot: targetSlot, BlockHash: block.Hash(), BlockNumber: block.NumberU64()}}
 	if finalized := n.finalizedEventBetween(targetSlot-1, targetSlot); finalized != nil {
@@ -139,7 +152,7 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 	}
 	if err := n.commitPrepared(chain, operation, events, func() error {
 		rawdb.WriteBlock(chain.db, block)
-		rawdb.WriteReceipts(chain.db, block.Hash(), block.NumberU64(), types.Receipts{})
+		rawdb.WriteReceipts(chain.db, block.Hash(), block.NumberU64(), receiptSets[0])
 		_, setErr := chain.blockchain.SetCanonical(block)
 		return setErr
 	}, func() {
@@ -150,8 +163,11 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 		chain.blockSafety[block.Hash()] = safety
 		chain.sessionTainted = true
 		chain.firstUnsafeBlock = cloneHashPointer(sessionSafety.FirstUnsafeBlock)
-		chain.taintReasons[taintControlStateOverride] = struct{}{}
+		for _, reason := range sessionSafety.Reasons {
+			chain.taintReasons[reason] = struct{}{}
+		}
 		chain.mu.Unlock()
+		n.pendingExecutionRequests = prepared.Remaining
 	}); err != nil {
 		return common.Hash{}, err
 	}

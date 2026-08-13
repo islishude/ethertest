@@ -39,6 +39,7 @@ type minerAPI struct{ node *Node }
 type controlAPI struct{ node *Node }
 type finalityAPI struct{ node *Node }
 type withdrawalAPI struct{ node *Node }
+type executionRequestAPI struct{ node *Node }
 type debugAPI struct{ node *Node }
 type personalAPI struct{ node *Node }
 

@@ -22,6 +22,7 @@ func (n *Node) startServers() error {
 		{Namespace: "ethertest", Service: &controlAPI{n}},
 		{Namespace: "ethertest", Service: &walletAPI{n}},
 		{Namespace: "ethertest", Service: &withdrawalAPI{n}},
+		{Namespace: "ethertest", Service: &executionRequestAPI{n}},
 		{Namespace: "ethertest", Service: &finalityAPI{n}},
 		{Namespace: "anvil", Service: &controlAPI{n}},
 		{Namespace: "evm", Service: &controlAPI{n}},

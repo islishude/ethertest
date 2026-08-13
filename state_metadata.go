@@ -26,6 +26,7 @@ var (
 
 const (
 	taintControlStateOverride      = "control-state-override"
+	taintExecutionRequestControl   = "execution-request-control"
 	taintSafetyMetadataUnavailable = "safety-metadata-unavailable"
 )
 
@@ -488,9 +489,16 @@ func hashKey(prefix []byte, hash common.Hash) []byte {
 	return key
 }
 
-func blockSafetyForChild(parent BlockSafety, hash common.Hash, unsafeReason string) BlockSafety {
+func blockSafetyForChild(parent BlockSafety, hash common.Hash, unsafeReasons ...string) BlockSafety {
 	safety := BlockSafety{BlockHash: hash}
-	if !parent.Tainted && unsafeReason == "" {
+	hasUnsafeReason := false
+	for _, reason := range unsafeReasons {
+		if reason != "" {
+			hasUnsafeReason = true
+			break
+		}
+	}
+	if !parent.Tainted && !hasUnsafeReason {
 		return safety
 	}
 	safety.Tainted = true
@@ -500,11 +508,27 @@ func blockSafetyForChild(parent BlockSafety, hash common.Hash, unsafeReason stri
 		safety.FirstUnsafeBlock = &value
 	}
 	safety.Reasons = append([]string(nil), parent.Reasons...)
-	if unsafeReason != "" && !slices.Contains(safety.Reasons, unsafeReason) {
-		safety.Reasons = append(safety.Reasons, unsafeReason)
-		slices.Sort(safety.Reasons)
+	for _, unsafeReason := range unsafeReasons {
+		if unsafeReason != "" && !slices.Contains(safety.Reasons, unsafeReason) {
+			safety.Reasons = append(safety.Reasons, unsafeReason)
+		}
 	}
+	slices.Sort(safety.Reasons)
 	return safety
+}
+
+func taintStoredSession(session storedSessionSafety, safety BlockSafety, unsafeReasons ...string) storedSessionSafety {
+	session.Tainted = true
+	if session.FirstUnsafeBlock == nil {
+		session.FirstUnsafeBlock = cloneHashPointer(safety.FirstUnsafeBlock)
+	}
+	for _, reason := range unsafeReasons {
+		if reason != "" && !slices.Contains(session.Reasons, reason) {
+			session.Reasons = append(session.Reasons, reason)
+		}
+	}
+	slices.Sort(session.Reasons)
+	return session
 }
 
 func cloneHashPointer(value *common.Hash) *common.Hash {

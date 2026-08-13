@@ -230,10 +230,24 @@ func (m *consensusModel) signedHeader(chain *executionChain, block *types.Block)
 func (m *consensusModel) signedBlock(chain *executionChain, block *types.Block) (*consensusBlock, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.signedBlockLocked(chain, block)
+	return m.signedBlockLocked(chain, block, nil)
 }
 
-func (m *consensusModel) signedBlockLocked(chain *executionChain, block *types.Block) (*consensusBlock, error) {
+func (m *consensusModel) signedBlockWithRequests(
+	chain *executionChain,
+	block *types.Block,
+	requests *electra.ExecutionRequests,
+) (*consensusBlock, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.signedBlockLocked(chain, block, requests)
+}
+
+func (m *consensusModel) signedBlockLocked(
+	chain *executionChain,
+	block *types.Block,
+	requests *electra.ExecutionRequests,
+) (*consensusBlock, error) {
 	if existing := m.blocks[block.Hash()]; existing != nil {
 		return existing, nil
 	}
@@ -255,7 +269,7 @@ func (m *consensusModel) signedBlockLocked(chain *executionChain, block *types.B
 		if parent == nil {
 			return nil, fmt.Errorf("execution parent %s not found", block.ParentHash())
 		}
-		parentSigned, err := m.signedBlockLocked(chain, parent)
+		parentSigned, err := m.signedBlockLocked(chain, parent, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -265,7 +279,7 @@ func (m *consensusModel) signedBlockLocked(chain *executionChain, block *types.B
 		}
 		parentRoot = root
 	}
-	body, err := m.body(chain, block, slot)
+	body, err := m.body(chain, block, slot, requests)
 	if err != nil {
 		return nil, err
 	}
@@ -322,7 +336,12 @@ func denebBodyFromElectra(body *electra.BeaconBlockBody) *deneb.BeaconBlockBody 
 	}
 }
 
-func (m *consensusModel) body(chain *executionChain, block *types.Block, slot uint64) (*electra.BeaconBlockBody, error) {
+func (m *consensusModel) body(
+	chain *executionChain,
+	block *types.Block,
+	slot uint64,
+	executionRequests *electra.ExecutionRequests,
+) (*electra.BeaconBlockBody, error) {
 	transactions := make([]bellatrix.Transaction, len(block.Transactions()))
 	commitments := make([]deneb.KZGCommitment, 0)
 	for index, transaction := range block.Transactions() {
@@ -373,10 +392,7 @@ func (m *consensusModel) body(chain *executionChain, block *types.Block, slot ui
 		SyncAggregate:    &altair.SyncAggregate{SyncCommitteeBits: make(bitfield.Bitvector512, 64)},
 		ExecutionPayload: payload, BLSToExecutionChanges: []*capella.SignedBLSToExecutionChange{},
 		BlobKZGCommitments: commitments,
-		ExecutionRequests: &electra.ExecutionRequests{
-			Deposits: []*electra.DepositRequest{}, Withdrawals: []*electra.WithdrawalRequest{},
-			Consolidations: []*electra.ConsolidationRequest{},
-		},
+		ExecutionRequests:  cloneElectraExecutionRequests(executionRequests),
 	}, nil
 }
 

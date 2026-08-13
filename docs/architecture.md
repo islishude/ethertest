@@ -16,12 +16,13 @@ private keys. Wallet mutation passes through the same ordered controller while
 address enumeration and signing use the wallet's read lock.
 
 Memory and Pebble use one `ethdb.Database` with separate prefixes for blob,
-control, checkpoint, branch, projection, safety, slot, and event data; geth owns
-its execution keys. A prepared-operation journal brackets execution block/head
-mutation and one auxiliary batch. Startup cancels an intent when geth still has
-the old head, completes it when geth reached the target, and fails closed when
-neither state matches. Events and their slot/index metadata share the auxiliary
-batch.
+control, execution-request queue/records, checkpoint, branch, projection,
+safety, slot, and event data; geth owns its execution keys. A prepared-operation
+journal brackets execution block/head mutation and one auxiliary batch. Startup
+cancels an intent when geth still has the old head, completes it when geth
+reached the target, and fails closed when neither state matches. Events, request
+queue changes and consumed IDs, Beacon projections, and slot/safety metadata
+share the auxiliary batch.
 
 The alpha metadata layout is updated in place. There is no v2 schema or data
 migration path: a nonempty database without the current metadata marker is
@@ -70,9 +71,32 @@ Beacon block root. JSON and SSZ are loaded from the same persisted projection.
 The Beacon projection changes from the Deneb block container to the
 Electra/Fulu container at the configured Prague epoch. Fulu data-column
 sidecars use the narrow local SSZ implementation; the block container remains
-the Electra shape as specified for this subset. Validator balances are currently
-static and execution request/withdrawal queues are empty pending their v0.1
-state-machine gate.
+the Electra shape as specified for this subset. Validator balances remain
+static, but `execution_requests` are populated from the same typed bytes used by
+the EL `requestsHash`.
+
+After all transactions have been added, block generation asks geth for its
+native EIP-6110/7002/7251 output. Unknown types, noncanonical type ordering,
+bad fixed lengths, protocol-limit overflow, or a hash mismatch reject the
+candidate. Native request bytes, the complete request bytes, and any consumed
+synthetic control IDs are persisted per execution block. Missing legacy records
+are derived from the stored Beacon projection only when block re-execution
+confirms the bytes are native; an unrecoverable nonempty history fails closed.
+
+Three Node-owned persistent FIFOs provide synthetic deposit, withdrawal, and
+consolidation controls. Each entry has a database-monotonic ID. Native entries
+occupy each type's capacity first and controls append in FIFO order. Branch
+mining records only its geth-native output and never consumes the control queue.
+Canonical switching restores controls from the removed path, removes IDs
+consumed by the added path, and sorts the result by ID. Geth's native
+withdrawal/consolidation contract queues instead follow the selected StateDB;
+deposit requests remain attached to the block containing their log.
+
+A block containing a synthetic request control is resealed with the combined
+`requestsHash` and canonicalized through the recovery journal rather than geth's
+normal request validation, because no corresponding execution transition
+exists. It receives permanent `execution-request-control` taint. Native-only
+blocks remain replayable and untainted.
 
 The network advertises `consensusMode: synthetic`, `beaconApi: v4-subset`,
 `fullConsensus: false`, and `releaseComplete: false`.

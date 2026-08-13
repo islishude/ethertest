@@ -74,6 +74,7 @@ func (n *Node) commitPrepared(
 	operation.Puts = append(operation.Puts, plan.puts...)
 	operation.Deletes = append(operation.Deletes, plan.deletes...)
 	if err := writePreparedOperation(chain.db, operation); err != nil {
+		n.writeErr = err
 		return err
 	}
 	if n.commitHook != nil {
@@ -124,15 +125,18 @@ func (n *Node) commitAuxiliary(
 	batch := chain.db.NewBatch()
 	for _, item := range append(puts, plan.puts...) {
 		if err := batch.Put(item.Key, item.Value); err != nil {
+			n.writeErr = err
 			return err
 		}
 	}
 	for _, key := range append(deletes, plan.deletes...) {
 		if err := batch.Delete(key); err != nil {
+			n.writeErr = err
 			return err
 		}
 	}
 	if err := batch.Write(); err != nil {
+		n.writeErr = err
 		return err
 	}
 	apply()

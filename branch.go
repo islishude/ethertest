@@ -65,26 +65,37 @@ func (n *Node) MineBranch(ctx context.Context, name string, count uint64) ([]com
 				return nil, err
 			}
 			targetTime := parent.Time() + uint64(n.cfg.Chain.SlotDuration.Seconds())
+			var nativeRequests [][]byte
 			blocks, _ := core.GenerateChain(chain.config, parent, chain.blockchain.Engine(), chain.db, 1, func(_ int, gen *core.BlockGen) {
 				gen.OffsetTime(int64(targetTime) - int64(gen.Timestamp()))
 				gen.SetPoS()
 				gen.SetCoinbase(chain.feeRecipientAddress())
 				gen.SetParentBeaconRoot(common.Hash(projection.Root))
 				gen.SetExtra([]byte("ethertest-branch:" + name))
+				nativeRequests = cloneExecutionRequestBytes(gen.ConsensusLayerRequests())
 			})
 			block := blocks[0]
+			prepared, err := prepareExecutionRequestBlock(block, nativeRequests, newExecutionRequestQueue())
+			if err != nil {
+				return nil, err
+			}
+			block = prepared.Block
 			slot := uint64(0)
 			if block.Time() > chain.genesisTime {
 				slot = (block.Time() - chain.genesisTime) / chain.slotDuration
 			}
-			projectionPut, err := n.consensus.projectionPut(chain, block)
+			projectionPut, err := n.consensus.projectionPut(chain, block, prepared.Requests)
+			if err != nil {
+				return nil, err
+			}
+			requestRecordPut, err := executionRequestRecordPut(block.Hash(), prepared.Record)
 			if err != nil {
 				return nil, err
 			}
 			chain.mu.RLock()
 			parentSafety := chain.blockSafety[parent.Hash()]
 			chain.mu.RUnlock()
-			safety := blockSafetyForChild(parentSafety, block.Hash(), "")
+			safety := blockSafetyForChild(parentSafety, block.Hash())
 			updated := &branch{
 				name: item.name, base: item.base, head: block.Hash(),
 				blocks:  append(append([]common.Hash(nil), item.blocks...), block.Hash()),
@@ -100,7 +111,9 @@ func (n *Node) MineBranch(ctx context.Context, name string, count uint64) ([]com
 			}
 			operation := preparedOperation{
 				Kind: "block", TargetBlock: block.Hash(),
-				Puts: []journalKV{blockSlotPut(block.Hash(), slot), safetyMutation, projectionPut, branchMutation},
+				Puts: []journalKV{
+					blockSlotPut(block.Hash(), slot), safetyMutation, projectionPut, requestRecordPut, branchMutation,
+				},
 			}
 			if err := n.commitPrepared(chain, operation, nil, func() error {
 				_, insertErr := chain.blockchain.InsertBlockWithoutSetHead(ctx, block, false)
@@ -174,6 +187,12 @@ func (n *Node) switchCanonical(chain *executionChain, target *types.Block, targe
 		return nil
 	}
 	oldPath, newPath := divergentPaths(chain, oldHead, target)
+	reconciledQueue, err := reconcileExecutionRequestQueue(
+		chain, n.pendingExecutionRequests, oldPath, newPath,
+	)
+	if err != nil {
+		return err
+	}
 	commonAncestor := oldHead
 	for range oldPath {
 		commonAncestor = chain.blockchain.GetBlockByHash(commonAncestor.ParentHash())
@@ -191,9 +210,13 @@ func (n *Node) switchCanonical(chain *executionChain, target *types.Block, targe
 	if err != nil {
 		return err
 	}
+	queueMutation, err := executionRequestQueuePut(reconciledQueue)
+	if err != nil {
+		return err
+	}
 	operation := preparedOperation{
 		Kind: "head", OldHead: oldHead.Hash(), NewHead: target.Hash(),
-		Puts: []journalKV{timelineMutation},
+		Puts: []journalKV{timelineMutation, queueMutation},
 	}
 	for slot, hash := range canonicalSlots {
 		if slot > targetSlot {
@@ -241,6 +264,7 @@ func (n *Node) switchCanonical(chain *executionChain, target *types.Block, targe
 		chain.finalityPaused, chain.finalitySlot = timeline.FinalityPaused, timeline.FinalitySlot
 		chain.canonicalBlockBySlot = canonicalSlots
 		chain.mu.Unlock()
+		n.pendingExecutionRequests = reconciledQueue
 	}); err != nil {
 		return err
 	}
