@@ -10,10 +10,13 @@ Beacon projection, and revision event publication are produced by that
 controller. The public Go API intentionally does not expose mutable geth state.
 
 A Node-owned, concurrency-safe in-memory wallet is the sole owner of signing
-keys. The execution chain receives configured addresses for genesis allocation,
-fee-recipient defaults, and synthetic validator setup, but never retains their
-private keys. Wallet mutation passes through the same ordered controller while
-address enumeration and signing use the wallet's read lock.
+keys. For the generated genesis, the execution chain receives configured
+addresses for allocation; an imported execution genesis instead preserves its
+exact alloc and does not fund or otherwise merge wallet addresses. In both
+modes the addresses remain available for fee-recipient defaults and synthetic
+validator setup, and the chain never retains their private keys. Wallet mutation
+passes through the same ordered controller while address enumeration and signing
+use the wallet's read lock.
 
 Memory and Pebble use one `ethdb.Database` with separate prefixes for blob,
 control, execution-request queue/records, checkpoint, branch, projection,
@@ -27,9 +30,15 @@ share the auxiliary batch.
 The alpha metadata layout is updated in place. There is no v2 schema or data
 migration path: a nonempty database without the current metadata marker is
 rejected with an instruction to create a fresh chain.
-For a new chain, `genesis_time = 0` is resolved once; subsequent Pebble starts
-load that value from the timeline before constructing geth's genesis block.
-An explicit conflicting value fails closed.
+For a new generated chain, `genesis_time = 0` is resolved once; subsequent
+Pebble starts load that value from the timeline before constructing geth's
+genesis block. An explicit conflicting value fails closed.
+External execution genesis files retain their timestamp, including zero. New
+imports persist an external-genesis marker and hash in the same timeline. On a
+later start without the source file, geth's stored genesis header, alloc, and
+ChainConfig are reconstructed before the synthetic consensus model is created;
+a re-supplied file must match both the stored hash and ChainConfig. Archives
+carry this metadata because they contain the complete shared database.
 
 Canonical slot lookup and per-execution-hash branch slots are separate. Missed
 slots, checkpoint slots, synthetic Beacon projections, and lineage safety are

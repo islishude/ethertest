@@ -1,6 +1,8 @@
 [chain]
 chain_id = 1337
-network_id = 1337
+# Zero inherits the effective chain ID, including one imported from genesis.
+network_id = 0
+# genesis = "genesis.json"
 genesis_time = 1800000000
 slot_duration = "6s"
 slots_per_epoch = 8

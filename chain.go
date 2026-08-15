@@ -32,6 +32,8 @@ type executionChain struct {
 	feeRecipient         common.Address
 	slot                 uint64
 	genesisTime          uint64
+	genesisHash          common.Hash
+	externalGenesis      bool
 	slotDuration         uint64
 	slotByHash           map[common.Hash]uint64
 	canonicalBlockBySlot map[uint64]common.Hash
@@ -89,14 +91,11 @@ func executionChainConfig(cfg Config) *params.ChainConfig {
 		PragueTime:              activationTime(cfg.Chain.Forks.PragueEpoch),
 		OsakaTime:               activationTime(cfg.Chain.Forks.OsakaEpoch),
 		TerminalTotalDifficulty: zeroBlock(),
-		BlobScheduleConfig: &params.BlobScheduleConfig{
-			Cancun: &params.BlobConfig{Target: 3, Max: 6, UpdateFraction: 3_338_477},
-			Prague: &params.BlobConfig{Target: 6, Max: 9, UpdateFraction: 5_007_716},
-		},
+		BlobScheduleConfig:      repositoryBlobSchedule(),
 	}
 }
 
-func newExecutionChain(cfg *Config, accounts []common.Address) (*executionChain, error) {
+func newExecutionChain(cfg *Config, accounts []common.Address, suppliedGenesis *core.Genesis) (*executionChain, error) {
 	var database ethdb.Database
 	switch cfg.Storage.Engine {
 	case "memory":
@@ -121,32 +120,78 @@ func newExecutionChain(cfg *Config, accounts []common.Address) (*executionChain,
 		return nil, err
 	}
 	iterator.Release()
+	var persisted storedTimeline
 	if existingData {
-		storedGenesisTime, err := readPersistedGenesisTime(database)
+		var err error
+		persisted, err = readPersistedGenesisMetadata(database)
 		if err != nil {
 			_ = database.Close() //nolint:errcheck
 			return nil, err
 		}
-		if cfg.Chain.GenesisTime == 0 {
-			cfg.Chain.GenesisTime = int64(storedGenesisTime)
-		} else if uint64(cfg.Chain.GenesisTime) != storedGenesisTime {
+		storedHash := rawdb.ReadCanonicalHash(database, 0)
+		if storedHash == (common.Hash{}) {
 			_ = database.Close() //nolint:errcheck
-			return nil, fmt.Errorf("configured genesis time %d does not match stored genesis time %d", cfg.Chain.GenesisTime, storedGenesisTime)
+			return nil, errors.New("persisted ethertest data is missing the execution genesis")
 		}
-	} else if cfg.Chain.GenesisTime == 0 {
+		if persisted.GenesisHash != (common.Hash{}) && persisted.GenesisHash != storedHash {
+			_ = database.Close() //nolint:errcheck
+			return nil, fmt.Errorf("stored genesis metadata hash %s does not match database hash %s", persisted.GenesisHash, storedHash)
+		}
+	}
+
+	genesis := suppliedGenesis
+	externalGenesis := !existingData && suppliedGenesis != nil
+	if existingData && (persisted.ExternalGenesis || suppliedGenesis != nil) {
+		storedGenesis, err := readPersistedExecutionGenesis(database)
+		if err != nil {
+			_ = database.Close() //nolint:errcheck
+			return nil, fmt.Errorf("read persisted execution genesis: %w", err)
+		}
+		if suppliedGenesis != nil {
+			if err := compareExecutionGenesis(storedGenesis, suppliedGenesis); err != nil {
+				_ = database.Close() //nolint:errcheck
+				return nil, err
+			}
+		}
+		genesis = storedGenesis
+		externalGenesis = persisted.ExternalGenesis
+	}
+	if genesis != nil {
+		if err := applyExecutionGenesis(cfg, genesis); err != nil {
+			_ = database.Close() //nolint:errcheck
+			return nil, fmt.Errorf("execution genesis: %w", err)
+		}
+	}
+	if existingData {
+		if cfg.Chain.GenesisTime == 0 && !persisted.ExternalGenesis && suppliedGenesis == nil {
+			cfg.Chain.GenesisTime = int64(persisted.GenesisTime)
+		} else if uint64(cfg.Chain.GenesisTime) != persisted.GenesisTime {
+			_ = database.Close() //nolint:errcheck
+			return nil, fmt.Errorf("configured genesis time %d does not match stored genesis time %d", cfg.Chain.GenesisTime, persisted.GenesisTime)
+		}
+	} else if genesis == nil && cfg.Chain.GenesisTime == 0 {
 		cfg.Chain.GenesisTime = time.Now().UTC().Unix()
 	}
-	chainConfig := executionChainConfig(*cfg)
-	genesis := core.DeveloperGenesisBlock(cfg.Chain.GasLimit, nil)
-	genesis.Config = chainConfig
-	genesis.Timestamp = uint64(cfg.Chain.GenesisTime)
-	balance, err := parseBalance(cfg.Accounts.Balance)
-	if err != nil {
+	if genesis == nil {
+		chainConfig := executionChainConfig(*cfg)
+		genesis = core.DeveloperGenesisBlock(cfg.Chain.GasLimit, nil)
+		genesis.Config = chainConfig
+		genesis.Timestamp = uint64(cfg.Chain.GenesisTime)
+		balance, err := parseBalance(cfg.Accounts.Balance)
+		if err != nil {
+			_ = database.Close() //nolint:errcheck
+			return nil, err
+		}
+		for _, address := range accounts {
+			genesis.Alloc[address] = types.Account{Balance: new(big.Int).Set(balance)}
+		}
+	}
+	if cfg.Chain.NetworkID == 0 {
+		cfg.Chain.NetworkID = cfg.Chain.ChainID
+	}
+	if err := cfg.validateResolved(); err != nil {
 		_ = database.Close() //nolint:errcheck
 		return nil, err
-	}
-	for _, address := range accounts {
-		genesis.Alloc[address] = types.Account{Balance: new(big.Int).Set(balance)}
 	}
 	engine := beacon.New(ethash.NewFaker())
 	bcCfg := core.DefaultConfig()
@@ -182,12 +227,13 @@ func newExecutionChain(cfg *Config, accounts []common.Address) (*executionChain,
 	}
 	currentSlot := slotByHash[blockchain.CurrentBlock().Hash()]
 	chain := &executionChain{
-		config: chainConfig, db: database, blockchain: blockchain,
+		config: blockchain.Config(), db: database, blockchain: blockchain,
 		feeRecipient: feeRecipient,
 		pending:      make(map[common.Address]map[uint64]*types.Transaction),
 		arrival:      make(map[common.Hash]uint64),
 		blobs:        make(map[common.Hash]*types.BlobTxSidecar), order: cfg.Mining.Order,
-		genesisTime: uint64(cfg.Chain.GenesisTime), slotDuration: uint64(cfg.Chain.SlotDuration / time.Second),
+		genesisTime: uint64(cfg.Chain.GenesisTime), genesisHash: blockchain.Genesis().Hash(),
+		externalGenesis: externalGenesis, slotDuration: uint64(cfg.Chain.SlotDuration / time.Second),
 		slot: currentSlot, slotByHash: slotByHash, canonicalBlockBySlot: canonicalBlockBySlot,
 		lastProcessedSlot: currentSlot, timelineComplete: true,
 		blockSafety: make(map[common.Hash]BlockSafety), taintReasons: make(map[string]struct{}),

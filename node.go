@@ -87,9 +87,11 @@ type branch struct {
 }
 
 func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
-	if err := cfg.Validate(); err != nil {
+	resolved, genesis, err := resolveConfiguredGenesis(cfg)
+	if err != nil {
 		return nil, err
 	}
+	cfg = resolved
 	options := nodeOptions{logger: discardLogger()}
 	for _, apply := range suppliedOptions {
 		if apply != nil {
@@ -105,7 +107,7 @@ func New(cfg Config, suppliedOptions ...Option) (*Node, error) {
 		return nil, err
 	}
 	configuredAddresses := wallet.accounts()
-	chain, err := newExecutionChain(&cfg, configuredAddresses)
+	chain, err := newExecutionChain(&cfg, configuredAddresses, genesis)
 	if err != nil {
 		return nil, err
 	}

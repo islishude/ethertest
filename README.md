@@ -10,9 +10,9 @@ The current version is `0.1.0-alpha.1`. State format compatibility is not
 promised until `v0.1.0`. This alpha uses an in-place, breaking state layout:
 databases created by the earlier layout are rejected and must be recreated;
 there is no migration command.
-An unspecified `genesis_time` (`0`) is resolved once for a new chain and then
-read from the persisted timeline on later Pebble starts. An explicitly supplied
-value that differs from the stored value is rejected.
+An unspecified `genesis_time` (`0`) is resolved once for a new generated chain
+and then read from the persisted timeline on later Pebble starts. An explicitly
+supplied value that differs from the stored value is rejected.
 
 ## Quick start
 
@@ -26,8 +26,8 @@ Defaults:
 - EL HTTP+WS and Beacon REST+SSE: `http://127.0.0.1:8545`
 - IPC: disabled; when enabled its default name is `ethertest.ipc`
 - Beacon API paths start at `http://127.0.0.1:8545/eth/`
-- chain/network ID: `1337` (matching `geth --dev`)
-- 10 Anvil-compatible accounts with 10,000 ETH each
+- chain/network ID: `1337` (matching `geth --dev`; `network_id = 0` inherits the chain ID)
+- 10 Anvil-compatible accounts with 10,000 ETH each in the generated default genesis
 - 6-second slots, 8 slots/epoch, 64 deterministic validators
 - Osaka/Fulu active at genesis
 - synthetic safe/finalized checkpoints lagging one/two epochs
@@ -159,9 +159,9 @@ Native typed bytes are validated strictly against the block `requestsHash`,
 then persisted with the Electra/Fulu Beacon projection. Native-only blocks keep
 normal geth insertion and do not taint their history. The deposit log parser
 uses geth's configured `DepositContractAddress`; contract code at any other
-address is not treated as EIP-6110 output. This surface does not add external
-genesis JSON loading; capture follows whichever genesis state and ChainConfig
-the embedding path supplies.
+address is not treated as EIP-6110 output. With an imported execution genesis,
+capture uses that file's exact state and ChainConfig after the cross-layer
+compatibility checks described below.
 
 The Go controls `Node.AddDepositRequest`, `Node.AddWithdrawalRequest`, and
 `Node.AddConsolidationRequest` have matching RPCs:
@@ -283,6 +283,36 @@ Beacon exposes only an `enabled` setting and inherits the shared HTTP address,
 CORS, TLS, request limits, and unsafe-external policy. Disabling HTTP disables
 HTTP, WebSocket, Beacon REST, and Beacon SSE; IPC remains independently
 available. Library configurations cannot enable Beacon without HTTP.
+
+### Execution genesis import
+
+An optional geth-compatible execution `genesis.json` can be selected with
+`Config.Chain.GenesisFile`, `[chain] genesis`, `ETHERTEST_GENESIS`, or
+`--genesis`. Relative paths are resolved from the process working directory.
+The selected file is authoritative for its execution ChainConfig, header fields,
+gas limit, timestamp, and complete `alloc`; ethertest does not merge the default
+account balances into it. Configured mnemonic accounts remain unlocked signers,
+but an address omitted from `alloc` starts unfunded.
+
+Imported chains must be proof-of-stake, start at London/Shanghai/Cancun, schedule
+Prague and Osaka on exact ethertest epoch boundaries, retain the repository's
+pinned Cancun/Prague blob parameters, and leave post-Osaka forks disabled. The
+fixed EIP-4788, EIP-2935, EIP-7002, and EIP-7251 system contract accounts must
+match geth's canonical initial code and state. Invalid files fail before the
+node starts and are never rewritten.
+
+`network_id = 0` inherits the effective execution chain ID; a nonzero
+`network_id`, `ETHERTEST_NETWORK_ID`, or `--network-id` explicitly overrides
+`net_version`. `ethertest config validate` parses and validates the genesis,
+while `config print` and `network --json` report the imported effective chain
+fields, gas limit, and fork epochs.
+
+For Pebble, the imported marker and genesis hash are stored alongside the
+timeline. Later starts may omit the source file and recover the genesis header,
+alloc, and ChainConfig from the database. If a file is supplied again, both its
+genesis hash and decoded ChainConfig must exactly match the stored values. A
+configured but unreadable path is an error. State archives retain the same
+metadata, so archive loads also restart without the source file.
 
 IPC is opt-in. Enable it with `[ipc] enabled = true`,
 `ETHERTEST_IPC_ENABLED=true`, or `--ipc PATH`; use `--no-ipc` to override an

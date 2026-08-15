@@ -52,12 +52,14 @@ type SafetyStatus struct {
 }
 
 type storedTimeline struct {
-	GenesisTime       uint64 `json:"genesis_time"`
-	CurrentSlot       uint64 `json:"current_slot"`
-	LastProcessedSlot uint64 `json:"last_processed_slot"`
-	Complete          bool   `json:"complete"`
-	FinalityPaused    bool   `json:"finality_paused,omitempty"`
-	FinalitySlot      uint64 `json:"finality_slot,omitempty"`
+	GenesisTime       uint64      `json:"genesis_time"`
+	GenesisHash       common.Hash `json:"genesis_hash,omitempty"`
+	ExternalGenesis   bool        `json:"external_genesis,omitempty"`
+	CurrentSlot       uint64      `json:"current_slot"`
+	LastProcessedSlot uint64      `json:"last_processed_slot"`
+	Complete          bool        `json:"complete"`
+	FinalityPaused    bool        `json:"finality_paused,omitempty"`
+	FinalitySlot      uint64      `json:"finality_slot,omitempty"`
 }
 
 type storedSessionSafety struct {
@@ -196,33 +198,36 @@ func initializeRuntimeMetadata(chain *executionChain, existingData bool) error {
 	return initializeFreshRuntimeMetadata(chain)
 }
 
-func readPersistedGenesisTime(db ethdb.Database) (uint64, error) {
+func readPersistedGenesisMetadata(db ethdb.Database) (storedTimeline, error) {
 	exists, err := db.Has(stateSchemaKey)
 	if err != nil {
-		return 0, err
+		return storedTimeline{}, err
 	}
 	if !exists {
-		return 0, errors.New("existing ethertest data does not contain the current in-place metadata format; remove it and create a fresh chain")
+		return storedTimeline{}, errors.New("existing ethertest data does not contain the current in-place metadata format; remove it and create a fresh chain")
 	}
 	version, err := db.Get(stateSchemaKey)
 	if err != nil {
-		return 0, err
+		return storedTimeline{}, err
 	}
 	if len(version) != 8 || binary.BigEndian.Uint64(version) != currentMetadataFormat {
-		return 0, errors.New("unsupported ethertest state metadata schema")
+		return storedTimeline{}, errors.New("unsupported ethertest state metadata schema")
 	}
 	encoded, err := db.Get(timelineKey)
 	if err != nil {
-		return 0, fmt.Errorf("read timeline metadata: %w", err)
+		return storedTimeline{}, fmt.Errorf("read timeline metadata: %w", err)
 	}
 	var timeline storedTimeline
 	if err := json.Unmarshal(encoded, &timeline); err != nil {
-		return 0, fmt.Errorf("decode timeline metadata: %w", err)
+		return storedTimeline{}, fmt.Errorf("decode timeline metadata: %w", err)
 	}
 	if timeline.GenesisTime > uint64(1<<63-1) {
-		return 0, errors.New("stored genesis time is out of range")
+		return storedTimeline{}, errors.New("stored genesis time is out of range")
 	}
-	return timeline.GenesisTime, nil
+	if timeline.ExternalGenesis && timeline.GenesisHash == (common.Hash{}) {
+		return storedTimeline{}, errors.New("stored external genesis metadata is missing the genesis hash")
+	}
+	return timeline, nil
 }
 
 func initializeFreshRuntimeMetadata(chain *executionChain) error {
@@ -276,6 +281,12 @@ func loadRuntimeMetadata(chain *executionChain) error {
 	}
 	if timeline.GenesisTime != chain.genesisTime {
 		return fmt.Errorf("stored genesis time %d does not match configured genesis time %d", timeline.GenesisTime, chain.genesisTime)
+	}
+	if timeline.ExternalGenesis != chain.externalGenesis {
+		return fmt.Errorf("stored external genesis marker %t does not match configured marker %t", timeline.ExternalGenesis, chain.externalGenesis)
+	}
+	if timeline.GenesisHash != (common.Hash{}) && timeline.GenesisHash != chain.genesisHash {
+		return fmt.Errorf("stored genesis hash %s does not match execution genesis hash %s", timeline.GenesisHash, chain.genesisHash)
 	}
 	chain.slot = timeline.CurrentSlot
 	chain.lastProcessedSlot = timeline.LastProcessedSlot
@@ -432,7 +443,8 @@ func validateRuntimeMetadata(chain *executionChain) error {
 
 func (c *executionChain) timeline() storedTimeline {
 	return storedTimeline{
-		GenesisTime: c.genesisTime, CurrentSlot: c.slot,
+		GenesisTime: c.genesisTime, GenesisHash: c.genesisHash, ExternalGenesis: c.externalGenesis,
+		CurrentSlot:       c.slot,
 		LastProcessedSlot: c.lastProcessedSlot, Complete: c.timelineComplete,
 		FinalityPaused: c.finalityPaused, FinalitySlot: c.finalitySlot,
 	}

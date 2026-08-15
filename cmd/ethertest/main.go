@@ -44,6 +44,8 @@ func commonFlags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{Name: "config", Usage: "strict TOML configuration file"},
 		&cli.Uint64Flag{Name: "chain-id"},
+		&cli.Uint64Flag{Name: "network-id", Usage: "network ID (0 inherits the effective chain ID)"},
+		&cli.StringFlag{Name: "genesis", Usage: "geth-compatible execution genesis.json"},
 		&cli.Int64Flag{Name: "genesis-time"},
 		&cli.StringFlag{Name: "http", Usage: "shared HTTP+WS listen address"},
 		&cli.BoolFlag{Name: "no-http"},
@@ -67,8 +69,17 @@ func effectiveConfig(ctx *cli.Context) (ethertest.Config, error) {
 	if err != nil {
 		return ethertest.Config{}, err
 	}
+	if ctx.IsSet("genesis") {
+		cfg.Chain.GenesisFile = ctx.String("genesis")
+	}
 	if ctx.IsSet("chain-id") {
-		cfg.Chain.ChainID, cfg.Chain.NetworkID = ctx.Uint64("chain-id"), ctx.Uint64("chain-id")
+		cfg.Chain.ChainID = ctx.Uint64("chain-id")
+		if cfg.Chain.GenesisFile == "" && !ctx.IsSet("network-id") {
+			cfg.Chain.NetworkID = ctx.Uint64("chain-id")
+		}
+	}
+	if ctx.IsSet("network-id") {
+		cfg.Chain.NetworkID = ctx.Uint64("network-id")
 	}
 	if ctx.IsSet("genesis-time") {
 		cfg.Chain.GenesisTime = ctx.Int64("genesis-time")
@@ -106,7 +117,7 @@ func effectiveConfig(ctx *cli.Context) (ethertest.Config, error) {
 	if ctx.IsSet("log-progress-interval") {
 		cfg.Log.ProgressInterval = ctx.Duration("log-progress-interval")
 	}
-	return cfg, cfg.Validate()
+	return ethertest.ResolveConfig(cfg)
 }
 
 func runNode(ctx *cli.Context) error {
@@ -169,7 +180,7 @@ func configCommand() *cli.Command {
 				if err != nil {
 					return err
 				}
-				return toml.NewEncoder(os.Stdout).Encode(cfg)
+				return writeEffectiveConfig(os.Stdout, cfg)
 			}},
 			{Name: "validate", Action: func(ctx *cli.Context) error {
 				_, err := effectiveConfig(ctx)
@@ -188,16 +199,37 @@ func networkCommand() *cli.Command {
 		if err != nil {
 			return err
 		}
-		executionEndpoint, beaconEndpoint, ipcEndpoint := configuredEndpoints(cfg)
-		value := map[string]any{
-			"chainId": cfg.Chain.ChainID, "networkId": cfg.Chain.NetworkID,
-			"genesisTime": cfg.Chain.GenesisTime, "fork": "osaka/fulu",
-			"execution": executionEndpoint, "consensus": beaconEndpoint, "ipc": ipcEndpoint,
-			"syntheticFinality": true, "consensusMode": "synthetic",
-			"beaconApi": "v4-subset", "fullConsensus": false, "releaseComplete": false,
-		}
-		return json.NewEncoder(os.Stdout).Encode(value)
+		return json.NewEncoder(os.Stdout).Encode(networkDescription(cfg))
 	}}
+}
+
+func writeEffectiveConfig(output io.Writer, cfg ethertest.Config) error {
+	cfg.Chain.NetworkID = cfg.EffectiveNetworkID()
+	return toml.NewEncoder(output).Encode(cfg)
+}
+
+func networkDescription(cfg ethertest.Config) map[string]any {
+	executionEndpoint, beaconEndpoint, ipcEndpoint := configuredEndpoints(cfg)
+	fork := "cancun/deneb"
+	if cfg.Chain.Forks.PragueEpoch == 0 {
+		fork = "prague/electra"
+	}
+	if cfg.Chain.Forks.OsakaEpoch == 0 {
+		fork = "osaka/fulu"
+	}
+	return map[string]any{
+		"chainId": cfg.Chain.ChainID, "networkId": cfg.EffectiveNetworkID(),
+		"genesisTime": cfg.Chain.GenesisTime, "gasLimit": cfg.Chain.GasLimit, "fork": fork,
+		"forkEpochs": map[string]uint64{
+			"cancun": cfg.Chain.Forks.CancunEpoch,
+			"prague": cfg.Chain.Forks.PragueEpoch,
+			"osaka":  cfg.Chain.Forks.OsakaEpoch,
+		},
+		"genesisFile": cfg.Chain.GenesisFile,
+		"execution":   executionEndpoint, "consensus": beaconEndpoint, "ipc": ipcEndpoint,
+		"syntheticFinality": true, "consensusMode": "synthetic",
+		"beaconApi": "v4-subset", "fullConsensus": false, "releaseComplete": false,
+	}
 }
 
 func configuredEndpoints(cfg ethertest.Config) (string, string, string) {

@@ -1,6 +1,7 @@
 package ethertest
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,9 +14,9 @@ import (
 func TestDefaultChainIDMatchesGethDev(t *testing.T) {
 	want := params.AllDevChainProtocolChanges.ChainID.Uint64()
 	cfg := DefaultConfig()
-	if DefaultChainID != want || cfg.Chain.ChainID != want || cfg.Chain.NetworkID != want {
-		t.Fatalf("default chain/network IDs = %d/%d, constant = %d, want geth dev ID %d",
-			cfg.Chain.ChainID, cfg.Chain.NetworkID, DefaultChainID, want)
+	if DefaultChainID != want || cfg.Chain.ChainID != want || cfg.Chain.NetworkID != 0 || cfg.EffectiveNetworkID() != want {
+		t.Fatalf("default chain/network IDs = %d/%d (effective %d), constant = %d, want geth dev ID %d",
+			cfg.Chain.ChainID, cfg.Chain.NetworkID, cfg.EffectiveNetworkID(), DefaultChainID, want)
 	}
 }
 
@@ -113,6 +114,38 @@ func TestEnvironmentOverridesAndRejectsUnknownKeys(t *testing.T) {
 	t.Setenv("ETHERTEST_UNKNOWN_SETTING", "1")
 	if _, err := ReadConfig(""); err == nil {
 		t.Fatal("expected unknown ETHERTEST_ key rejection")
+	}
+}
+
+func TestGenesisConfigurationSourcesAndNetworkInheritance(t *testing.T) {
+	cfg := testConfig()
+	first := externalGenesisForTest(t, cfg, 4242, 1, 2)
+	second := externalGenesisForTest(t, cfg, 4343, 1, 2)
+	firstPath := writeExternalGenesis(t, first)
+	secondPath := writeExternalGenesis(t, second)
+	configPath := filepath.Join(t.TempDir(), "ethertest.toml")
+	contents := fmt.Sprintf("[chain]\ngenesis = %q\nnetwork_id = 0\n", firstPath)
+	if err := os.WriteFile(configPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Chain.GenesisFile != firstPath || loaded.Chain.ChainID != 4242 ||
+		loaded.Chain.NetworkID != 0 || loaded.EffectiveNetworkID() != 4242 {
+		t.Fatalf("TOML genesis configuration = %#v", loaded.Chain)
+	}
+
+	t.Setenv("ETHERTEST_GENESIS", secondPath)
+	t.Setenv("ETHERTEST_NETWORK_ID", "777")
+	loaded, err = LoadConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Chain.GenesisFile != secondPath || loaded.Chain.ChainID != 4343 || loaded.Chain.NetworkID != 777 {
+		t.Fatalf("environment genesis override = %#v", loaded.Chain)
 	}
 }
 

@@ -38,6 +38,7 @@ type Config struct {
 type ChainConfig struct {
 	ChainID       uint64        `toml:"chain_id"`
 	NetworkID     uint64        `toml:"network_id"`
+	GenesisFile   string        `toml:"genesis"`
 	GenesisTime   int64         `toml:"genesis_time"`
 	SlotDuration  time.Duration `toml:"slot_duration"`
 	SlotsPerEpoch uint64        `toml:"slots_per_epoch"`
@@ -113,7 +114,7 @@ type LogConfig struct {
 func DefaultConfig() Config {
 	return Config{
 		Chain: ChainConfig{
-			ChainID: DefaultChainID, NetworkID: DefaultChainID,
+			ChainID:      DefaultChainID,
 			SlotDuration: 6 * time.Second, SlotsPerEpoch: 8,
 			Validators: 64, GasLimit: 30_000_000,
 		},
@@ -160,12 +161,17 @@ func LoadConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	return cfg, cfg.Validate()
+	return ResolveConfig(cfg)
 }
 
 func (c Config) Validate() error {
-	if c.Chain.ChainID == 0 || c.Chain.NetworkID == 0 {
-		return errors.New("chain and network IDs must be non-zero")
+	_, err := ResolveConfig(c)
+	return err
+}
+
+func (c Config) validateResolved() error {
+	if c.Chain.ChainID == 0 {
+		return errors.New("chain ID must be non-zero")
 	}
 	if c.Chain.GenesisTime < 0 {
 		return errors.New("genesis time must be non-negative")
@@ -244,6 +250,15 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// EffectiveNetworkID resolves network_id = 0 to the effective execution chain
+// ID. Nodes store the resolved non-zero value after genesis initialization.
+func (c Config) EffectiveNetworkID() uint64 {
+	if c.Chain.NetworkID == 0 {
+		return c.Chain.ChainID
+	}
+	return c.Chain.NetworkID
 }
 
 // IPCEndpoint resolves the configured socket or named-pipe endpoint. A simple
@@ -331,6 +346,7 @@ func applyEnv(c *Config) error {
 	setters := []setter{
 		{"CHAIN_ID", uint(&c.Chain.ChainID)},
 		{"NETWORK_ID", uint(&c.Chain.NetworkID)},
+		{"GENESIS", func(v string) error { c.Chain.GenesisFile = v; return nil }},
 		{"GENESIS_TIME", func(v string) error { n, e := strconv.ParseInt(v, 10, 64); c.Chain.GenesisTime = n; return e }},
 		{"SLOT_DURATION", duration(&c.Chain.SlotDuration)},
 		{"SLOTS_PER_EPOCH", uint(&c.Chain.SlotsPerEpoch)},
