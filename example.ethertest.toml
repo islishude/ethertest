@@ -34,6 +34,19 @@ enabled = true
 engine = "memory"
 archive = true
 
+[limits]
+max_request_bytes = 16777216
+max_batch_items = 1000
+max_response_bytes = 67108864
+max_control_operations = 256
+max_log_blocks = 10000
+max_log_results = 10000
+rpc_gas_cap = 50000000
+trace_timeout = "5s"
+max_filters = 1024
+max_subscriptions = 1024
+filter_timeout = "5m"
+
 [log]
 level = "info"
 json = false

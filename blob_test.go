@@ -3,6 +3,7 @@ package ethertest
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -15,8 +16,10 @@ import (
 
 	"github.com/attestantio/go-eth2-client/spec/deneb"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 type failingBlobDatabase struct{ ethdb.Database }
@@ -41,6 +44,26 @@ func TestPackedBytesV1RoundTrip(t *testing.T) {
 	if !bytes.Equal(decoded, payload) {
 		t.Fatal("decoded payload differs")
 	}
+}
+
+func TestSignBlobTransactionRejectsUint256Overflow(t *testing.T) {
+	overflow := new(big.Int).Lsh(big.NewInt(1), 256)
+	_, err := SignBlobTransaction(BlobTransactionRequest{
+		ChainID: big.NewInt(1), GasTipCap: big.NewInt(1), GasFeeCap: overflow,
+		BlobFeeCap: big.NewInt(1), Value: big.NewInt(0),
+	}, testWalletAccountFromPrivateKey(t))
+	if err == nil {
+		t.Fatal("uint256 overflow was accepted")
+	}
+}
+
+func testWalletAccountFromPrivateKey(t *testing.T) *ecdsa.PrivateKey {
+	t.Helper()
+	accounts, err := DeriveAccounts(DefaultMnemonic, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return accounts[0].PrivateKey
 }
 
 func TestFuluDataColumnSSZLayout(t *testing.T) {
@@ -102,8 +125,8 @@ func TestOsakaBlobTransactionRejectsBadProofAndMinesValidSidecar(t *testing.T) {
 	if len(node.chain.blockchain.GetBlockByNumber(1).Transactions()[0].BlobHashes()) != 1 {
 		t.Fatal("mined block is missing blob commitment")
 	}
-	if node.chain.blobs[tx.Hash()] == nil {
-		t.Fatal("blob sidecar was not retained")
+	if node.chain.blobSidecarForVersion(tx.Hash(), types.BlobSidecarVersion0) == nil {
+		t.Fatal("blob sidecar was not retained in the canonical store")
 	}
 
 	request := httptest.NewRequest(http.MethodGet, "/eth/v1/beacon/blob_sidecars/head?indices=0", nil)
@@ -149,7 +172,7 @@ func TestOsakaBlobTransactionRejectsBadProofAndMinesValidSidecar(t *testing.T) {
 	}
 }
 
-func TestBlobDatabaseFailureLeavesNoPoolResidue(t *testing.T) {
+func TestPendingBlobStaysInMemoryUntilCanonicalCommit(t *testing.T) {
 	cfg := testConfig()
 	cfg.Mining.Mode = miningModeManual
 	node, err := New(cfg)
@@ -175,8 +198,8 @@ func TestBlobDatabaseFailureLeavesNoPoolResidue(t *testing.T) {
 	}
 	original := node.chain.db
 	node.chain.db = failingBlobDatabase{Database: original}
-	if _, err := node.SendTransaction(context.Background(), tx); err == nil || !strings.Contains(err.Error(), "injected blob database failure") {
-		t.Fatalf("blob database error = %v", err)
+	if _, err := node.SendTransaction(context.Background(), tx); err != nil {
+		t.Fatalf("pending blob submission = %v", err)
 	}
 	node.chain.mu.RLock()
 	poolCount, arrivalCount, blobCount := 0, len(node.chain.arrival), len(node.chain.blobs)
@@ -184,12 +207,12 @@ func TestBlobDatabaseFailureLeavesNoPoolResidue(t *testing.T) {
 		poolCount += len(byNonce)
 	}
 	node.chain.mu.RUnlock()
-	if poolCount != 0 || arrivalCount != 0 || blobCount != 0 {
-		t.Fatalf("pool residue pending/arrival/blob = %d/%d/%d", poolCount, arrivalCount, blobCount)
+	if poolCount != 1 || arrivalCount != 1 || blobCount != 1 {
+		t.Fatalf("pending pool/arrival/blob = %d/%d/%d", poolCount, arrivalCount, blobCount)
 	}
 	key := append(append([]byte(nil), blobNamespace...), tx.Hash().Bytes()...)
 	if exists, err := original.Has(key); err != nil || exists {
-		t.Fatalf("blob database residue exists=%v err=%v", exists, err)
+		t.Fatalf("pending blob was persisted: exists=%v err=%v", exists, err)
 	}
 }
 
@@ -315,17 +338,183 @@ func TestBeaconBlobsFiltersByVersionedHashAndPreservesBlockOrder(t *testing.T) {
 		t.Fatalf("empty SSZ response status=%d size=%d", response.Code, response.Body.Len())
 	}
 
-	node.chain.mu.Lock()
-	corrupt := node.chain.blobs[txHashes[0]].Copy()
+	key := append(append([]byte(nil), blobNamespace...), txHashes[0].Bytes()...)
+	encoded, err := node.chain.db.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corrupt blobBundle
+	if err := rlp.DecodeBytes(encoded, &corrupt); err != nil {
+		t.Fatal(err)
+	}
 	corrupt.Commitments = nil
-	node.chain.blobs[txHashes[0]] = corrupt
-	node.chain.mu.Unlock()
+	encoded, err = rlp.EncodeToBytes(&corrupt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.chain.db.Put(key, encoded); err != nil {
+		t.Fatal(err)
+	}
 	request = httptest.NewRequest(http.MethodGet, "/eth/v1/beacon/blobs/head", nil)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("corrupt sidecar returned %d, want 500", response.Code)
 	}
+}
+
+func TestQueuedDenebBlobCrossesIntoFuluWithDataColumns(t *testing.T) {
+	cfg := testConfig()
+	cfg.Mining.Mode = miningModeManual
+	cfg.Chain.Forks.PragueEpoch = 0
+	cfg.Chain.Forks.OsakaEpoch = 1
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+	account := testWalletAccount(t, node, 0)
+	blob, err := EncodePackedBytesV1([]byte("cross-fork blob"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := SignBlobTransaction(BlobTransactionRequest{
+		ChainID: new(big.Int).SetUint64(cfg.Chain.ChainID), Nonce: 1,
+		To: node.Accounts()[1], Gas: 100_000,
+		GasTipCap: big.NewInt(1_000_000_000), GasFeeCap: big.NewInt(3_000_000_000),
+		BlobFeeCap: big.NewInt(1_000_000_000), Blob: blob,
+	}, account.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := newBlobBundle(transaction.BlobTxSidecar())
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction = transaction.WithBlobTxSidecar(bundle.sidecar(0))
+	if _, err := node.SendTransaction(context.Background(), transaction); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.Mine(context.Background(), cfg.Chain.SlotsPerEpoch, true); err != nil {
+		t.Fatal(err)
+	}
+	gap := signedDynamicTransaction(t, cfg, account, 0, node.Accounts()[1], big.NewInt(1), nil)
+	if _, err := node.SendTransaction(context.Background(), gap); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.Mine(context.Background(), 1, false); err != nil {
+		t.Fatal(err)
+	}
+	head := node.chain.blockchain.GetBlockByNumber(node.chain.blockchain.CurrentBlock().Number.Uint64())
+	if len(head.Transactions()) != 2 || head.Transactions()[1].Hash() != transaction.Hash() {
+		t.Fatalf("cross-fork block transactions = %#v", head.Transactions())
+	}
+	request := httptest.NewRequest(http.MethodGet, "/eth/v1/debug/beacon/data_column_sidecars/head", nil)
+	response := httptest.NewRecorder()
+	node.beaconHandler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("data column response = %d: %s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Data) != kzg4844.CellProofsPerBlob {
+		t.Fatalf("data columns = %d, want %d", len(envelope.Data), kzg4844.CellProofsPerBlob)
+	}
+}
+
+func TestSameBlobTransactionSurvivesCrossForkBranchesAndReverseReorg(t *testing.T) {
+	cfg := testConfig()
+	cfg.Mining.Mode = miningModeManual
+	cfg.Chain.Forks.PragueEpoch = 0
+	cfg.Chain.Forks.OsakaEpoch = 1
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+	if err := node.Checkpoint(t.Context(), "origin"); err != nil {
+		t.Fatal(err)
+	}
+	account := testWalletAccount(t, node, 0)
+	blob, err := EncodePackedBytesV1([]byte("same transaction on both fork branches"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := SignBlobTransaction(BlobTransactionRequest{
+		ChainID: new(big.Int).SetUint64(cfg.Chain.ChainID), Nonce: 0,
+		To: node.Accounts()[1], Gas: 100_000,
+		GasTipCap: big.NewInt(1_000_000_000), GasFeeCap: big.NewInt(3_000_000_000),
+		BlobFeeCap: big.NewInt(1_000_000_000), Blob: blob,
+	}, account.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := newBlobBundle(transaction.BlobTxSidecar())
+	if err != nil {
+		t.Fatal(err)
+	}
+	denebTransaction := transaction.WithBlobTxSidecar(bundle.sidecar(types.BlobSidecarVersion0))
+	if _, err := node.SendTransaction(t.Context(), denebTransaction); err != nil {
+		t.Fatal(err)
+	}
+	denebHashes, err := node.Mine(t.Context(), 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Restore(t.Context(), "origin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.Mine(t.Context(), cfg.Chain.SlotsPerEpoch, true); err != nil {
+		t.Fatal(err)
+	}
+	fuluTransaction := transaction.WithBlobTxSidecar(bundle.sidecar(types.BlobSidecarVersion1))
+	if fuluTransaction.Hash() != denebTransaction.Hash() {
+		t.Fatal("sidecar conversion changed the transaction hash")
+	}
+	if _, err := node.SendTransaction(t.Context(), fuluTransaction); err != nil {
+		t.Fatal(err)
+	}
+	fuluHashes, err := node.Mine(t.Context(), 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Restore(t.Context(), "origin"); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStatus := func(path string, wantItems int) {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		response := httptest.NewRecorder()
+		node.beaconHandler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s returned %d: %s", path, response.Code, response.Body.String())
+		}
+		var envelope struct {
+			Data []json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if len(envelope.Data) != wantItems {
+			t.Fatalf("%s items = %d, want %d", path, len(envelope.Data), wantItems)
+		}
+	}
+	assertStatus("/eth/v1/beacon/blob_sidecars/"+denebHashes[0].Hex(), 1)
+	assertStatus(
+		"/eth/v1/debug/beacon/data_column_sidecars/"+fuluHashes[0].Hex(),
+		kzg4844.CellProofsPerBlob,
+	)
 }
 
 func TestBeaconBlobsRejectsInvalidVersionedHashes(t *testing.T) {

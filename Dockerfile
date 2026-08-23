@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
-FROM golang:1.26.5 AS build
+FROM golang:1.27.0 AS build
 WORKDIR /src
 COPY . .
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+	CGO_ENABLED=1 go test -run '^TestSecp256k1UsesCGOBackend$' .
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
 	go install -trimpath -ldflags="-s -w" ./cmd/ethertest

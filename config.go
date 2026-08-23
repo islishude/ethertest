@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/tyler-smith/go-bip39"
 )
 
 const (
@@ -100,9 +103,17 @@ type EventsConfig struct {
 }
 
 type ResourceLimits struct {
-	MaxRequestBytes  int64 `toml:"max_request_bytes"`
-	MaxBatchItems    int   `toml:"max_batch_items"`
-	MaxResponseBytes int64 `toml:"max_response_bytes"`
+	MaxRequestBytes      int64         `toml:"max_request_bytes"`
+	MaxBatchItems        int           `toml:"max_batch_items"`
+	MaxResponseBytes     int64         `toml:"max_response_bytes"`
+	MaxControlOperations uint64        `toml:"max_control_operations"`
+	MaxLogBlocks         uint64        `toml:"max_log_blocks"`
+	MaxLogResults        int           `toml:"max_log_results"`
+	RPCGasCap            uint64        `toml:"rpc_gas_cap"`
+	TraceTimeout         time.Duration `toml:"trace_timeout"`
+	MaxFilters           int           `toml:"max_filters"`
+	MaxSubscriptions     int           `toml:"max_subscriptions"`
+	FilterTimeout        time.Duration `toml:"filter_timeout"`
 }
 
 type LogConfig struct {
@@ -132,6 +143,9 @@ func DefaultConfig() Config {
 		Log:     LogConfig{Level: "info", ProgressInterval: 10 * time.Second},
 		Limits: ResourceLimits{
 			MaxRequestBytes: 16 << 20, MaxBatchItems: 1000, MaxResponseBytes: 64 << 20,
+			MaxControlOperations: 256, MaxLogBlocks: 10_000, MaxLogResults: 10_000,
+			RPCGasCap: 50_000_000, TraceTimeout: 5 * time.Second,
+			MaxFilters: 1024, MaxSubscriptions: 1024, FilterTimeout: 5 * time.Minute,
 		},
 	}
 }
@@ -185,6 +199,21 @@ func (c Config) validateResolved() error {
 	if c.Chain.SlotDuration%time.Second != 0 {
 		return errors.New("slot duration must be a whole number of seconds")
 	}
+	slotSeconds := uint64(c.Chain.SlotDuration / time.Second)
+	if c.Chain.SlotsPerEpoch > math.MaxUint64/slotSeconds {
+		return errors.New("slot duration and slots per epoch overflow")
+	}
+	epochSeconds := slotSeconds * c.Chain.SlotsPerEpoch
+	if c.Chain.Forks.OsakaEpoch > math.MaxUint64/epochSeconds {
+		return errors.New("fork activation time overflows uint64")
+	}
+	osakaOffset := c.Chain.Forks.OsakaEpoch * epochSeconds
+	if uint64(c.Chain.GenesisTime) > math.MaxUint64-osakaOffset {
+		return errors.New("osaka activation time overflows uint64")
+	}
+	if c.Chain.SlotsPerEpoch > math.MaxUint64/2 {
+		return errors.New("slots per epoch overflows finality lag")
+	}
 	if c.Chain.Validators != 64 {
 		return errors.New("v0.1 supports exactly the minimal preset's 64 validators")
 	}
@@ -198,6 +227,16 @@ func (c Config) validateResolved() error {
 	if c.Accounts.Count < 1 || c.Accounts.Count > 1024 {
 		return errors.New("accounts.count must be between 1 and 1024")
 	}
+	if !bip39.IsMnemonicValid(c.Accounts.Mnemonic) {
+		return errors.New("invalid BIP-39 mnemonic")
+	}
+	balance, err := parseBalance(c.Accounts.Balance)
+	if err != nil {
+		return err
+	}
+	if balance.BitLen() > 256 {
+		return errors.New("account balance exceeds uint256")
+	}
 	if c.Mining.Mode != "transaction" && c.Mining.Mode != "interval" && c.Mining.Mode != miningModeManual {
 		return fmt.Errorf("invalid mining.mode %q", c.Mining.Mode)
 	}
@@ -207,6 +246,9 @@ func (c Config) validateResolved() error {
 	if c.Mining.Mode == "interval" && c.Mining.Interval <= 0 {
 		return errors.New("mining.interval must be positive in interval mode")
 	}
+	if c.Mining.FeeRecipient != "" && !common.IsHexAddress(c.Mining.FeeRecipient) {
+		return errors.New("invalid mining.fee_recipient")
+	}
 	if c.Storage.Engine != "memory" && c.Storage.Engine != "pebble" {
 		return fmt.Errorf("unsupported storage.engine %q", c.Storage.Engine)
 	}
@@ -214,7 +256,11 @@ func (c Config) validateResolved() error {
 		return errors.New("storage.path is required for Pebble")
 	}
 	if c.Limits.MaxRequestBytes <= 0 || c.Limits.MaxResponseBytes <= 0 ||
-		c.Limits.MaxBatchItems <= 0 || c.Events.Capacity == 0 {
+		c.Limits.MaxRequestBytes >= int64(math.MaxInt) || c.Limits.MaxResponseBytes > int64(math.MaxInt) ||
+		c.Limits.MaxBatchItems <= 0 || c.Limits.MaxControlOperations == 0 || c.Limits.MaxControlOperations > uint64(math.MaxInt) ||
+		c.Limits.MaxLogBlocks == 0 || c.Limits.MaxLogResults <= 0 || c.Limits.RPCGasCap < 21_000 ||
+		c.Limits.TraceTimeout <= 0 || c.Limits.MaxFilters <= 0 || c.Limits.MaxSubscriptions <= 0 ||
+		c.Limits.FilterTimeout <= 0 || c.Events.Capacity == 0 || c.Events.Capacity > uint64(math.MaxInt) {
 		return errors.New("resource and event limits must be positive")
 	}
 	switch strings.ToLower(c.Log.Level) {
@@ -383,6 +429,14 @@ func applyEnv(c *Config) error {
 		{"MAX_REQUEST_BYTES", int64Value(&c.Limits.MaxRequestBytes)},
 		{"MAX_BATCH_ITEMS", integer(&c.Limits.MaxBatchItems)},
 		{"MAX_RESPONSE_BYTES", int64Value(&c.Limits.MaxResponseBytes)},
+		{"MAX_CONTROL_OPERATIONS", uint(&c.Limits.MaxControlOperations)},
+		{"MAX_LOG_BLOCKS", uint(&c.Limits.MaxLogBlocks)},
+		{"MAX_LOG_RESULTS", integer(&c.Limits.MaxLogResults)},
+		{"RPC_GAS_CAP", uint(&c.Limits.RPCGasCap)},
+		{"TRACE_TIMEOUT", duration(&c.Limits.TraceTimeout)},
+		{"MAX_FILTERS", integer(&c.Limits.MaxFilters)},
+		{"MAX_SUBSCRIPTIONS", integer(&c.Limits.MaxSubscriptions)},
+		{"FILTER_TIMEOUT", duration(&c.Limits.FilterTimeout)},
 		{"LOG_LEVEL", func(v string) error { c.Log.Level = strings.ToLower(v); return nil }},
 		{"LOG_JSON", boolean(&c.Log.JSON)},
 		{"LOG_PROGRESS_INTERVAL", duration(&c.Log.ProgressInterval)},

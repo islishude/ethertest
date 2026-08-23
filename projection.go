@@ -55,11 +55,17 @@ func loadProjection(chain *executionChain, hash common.Hash) (*consensusBlock, s
 		if err := value.UnmarshalSSZ(record.SignedSSZ); err != nil {
 			return nil, storedProjection{}, false, fmt.Errorf("decode Deneb projection %s: %w", hash, err)
 		}
+		if value.Message == nil || value.Message.Body == nil || value.Message.Body.ExecutionPayload == nil {
+			return nil, storedProjection{}, false, fmt.Errorf("deneb projection %s is structurally incomplete", hash)
+		}
 		block.deneb = value
 	case "electra", "fulu":
 		value := new(electra.SignedBeaconBlock)
 		if err := value.UnmarshalSSZ(record.SignedSSZ); err != nil {
 			return nil, storedProjection{}, false, fmt.Errorf("decode %s projection %s: %w", record.Fork, hash, err)
+		}
+		if value.Message == nil || value.Message.Body == nil || value.Message.Body.ExecutionPayload == nil {
+			return nil, storedProjection{}, false, fmt.Errorf("%s projection %s is structurally incomplete", record.Fork, hash)
 		}
 		block.electra = value
 	default:
@@ -129,9 +135,92 @@ func (m *consensusModel) projectionPut(
 	block *types.Block,
 	requests *electra.ExecutionRequests,
 ) (journalKV, error) {
-	_, encoded, err := m.projectionRecord(chain, block, requests)
+	record, encoded, err := m.projectionRecord(chain, block, requests)
 	if err != nil {
 		return journalKV{}, err
 	}
+	chain.mu.RLock()
+	previous, collision := chain.beaconBlockByRoot[common.Hash(record.Root)]
+	chain.mu.RUnlock()
+	if collision && previous != block.Hash() {
+		return journalKV{}, fmt.Errorf("beacon root %s already belongs to execution block %s", record.Root, previous)
+	}
 	return journalKV{Key: projectionKey(block.Hash()), Value: encoded}, nil
+}
+
+func initializeBeaconRootIndex(model *consensusModel, chain *executionChain) error {
+	chain.mu.RLock()
+	hashes := make([]common.Hash, 0, len(chain.slotByHash))
+	for hash := range chain.slotByHash {
+		hashes = append(hashes, hash)
+	}
+	chain.mu.RUnlock()
+	index := make(map[common.Hash]common.Hash, len(hashes))
+	records := make(map[common.Hash]storedProjection, len(hashes))
+	for _, hash := range hashes {
+		consensusBlock, projection, exists, err := loadProjection(chain, hash)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("execution block %s has no Beacon projection", hash)
+		}
+		executionBlock := chain.blockchain.GetBlockByHash(hash)
+		if executionBlock == nil {
+			return fmt.Errorf("beacon projection %s has no execution block", hash)
+		}
+		if projection.Slot != chain.slotOf(executionBlock) {
+			return fmt.Errorf("beacon projection %s has slot %d, want %d", hash, projection.Slot, chain.slotOf(executionBlock))
+		}
+		expectedFork := "deneb"
+		if chain.config.IsPrague(executionBlock.Number(), executionBlock.Time()) {
+			expectedFork = "electra"
+		}
+		if chain.config.IsOsaka(executionBlock.Number(), executionBlock.Time()) {
+			expectedFork = "fulu"
+		}
+		if projection.Fork != expectedFork {
+			return fmt.Errorf("beacon projection %s uses fork %q, want %q", hash, projection.Fork, expectedFork)
+		}
+		executionHash, err := consensusBlock.executionHash()
+		if err != nil || executionHash != hash {
+			return fmt.Errorf("beacon projection %s execution payload is inconsistent", hash)
+		}
+		if err := model.validateProjectionObject(chain, executionBlock, consensusBlock); err != nil {
+			return fmt.Errorf("validate Beacon projection %s: %w", hash, err)
+		}
+		root := common.Hash(projection.Root)
+		if previous, duplicate := index[root]; duplicate && previous != hash {
+			return fmt.Errorf("beacon root %s maps to both %s and %s", root, previous, hash)
+		}
+		index[root] = hash
+		records[hash] = projection
+	}
+	for hash, projection := range records {
+		block := chain.blockchain.GetBlockByHash(hash)
+		if block.NumberU64() == 0 {
+			if projection.ParentRoot != (phase0.Root{}) {
+				return errors.New("genesis Beacon projection has a nonzero parent root")
+			}
+			continue
+		}
+		parent, exists := records[block.ParentHash()]
+		if !exists || projection.ParentRoot != parent.Root {
+			return fmt.Errorf("beacon projection %s does not reference its execution parent's Beacon root", hash)
+		}
+	}
+	chain.mu.Lock()
+	chain.beaconBlockByRoot = index
+	chain.mu.Unlock()
+	return nil
+}
+
+func applyProjectionIndex(chain *executionChain, executionHash common.Hash, mutation journalKV) {
+	var projection storedProjection
+	if json.Unmarshal(mutation.Value, &projection) != nil {
+		return
+	}
+	chain.mu.Lock()
+	chain.beaconBlockByRoot[common.Hash(projection.Root)] = executionHash
+	chain.mu.Unlock()
 }

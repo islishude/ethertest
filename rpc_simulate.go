@@ -26,7 +26,6 @@ import (
 	"maps"
 	"math/big"
 	"slices"
-	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -49,8 +48,6 @@ const (
 	maxSimulateBlocks        = 256
 	maxSimulateCallsPerBlock = 5000
 	maxSimulateTotalCalls    = 10000
-	maxSimulateGas           = 50_000_000
-	simulateTimeout          = 5 * time.Second
 )
 
 const (
@@ -178,14 +175,16 @@ type simulator struct {
 	validate       bool
 	fullTx         bool
 	timeIncrement  uint64
+	responseBytes  uint64
 }
 
 func (api *ethAPI) SimulateV1(ctx context.Context, payload simulationPayload, selector *rpc.BlockNumberOrHash) ([]*simulationBlockResult, error) {
 	if len(payload.BlockStateCalls) == 0 {
 		return nil, &invalidParamsError{message: "empty blockStateCalls"}
 	}
-	if len(payload.BlockStateCalls) > maxSimulateBlocks {
-		return nil, &clientLimitExceededError{message: fmt.Sprintf("too many blocks: %d > %d", len(payload.BlockStateCalls), maxSimulateBlocks)}
+	blockLimit := min(maxSimulateBlocks, int(api.node.cfg.Limits.MaxControlOperations))
+	if len(payload.BlockStateCalls) > blockLimit {
+		return nil, &clientLimitExceededError{message: fmt.Sprintf("too many blocks: %d > %d", len(payload.BlockStateCalls), blockLimit)}
 	}
 	totalCalls := 0
 	for _, block := range payload.BlockStateCalls {
@@ -211,16 +210,26 @@ func (api *ethAPI) SimulateV1(ctx context.Context, payload simulationPayload, se
 	}
 	sim := &simulator{
 		node: api.node, state: statedb.Copy(), base: types.CopyHeader(base), config: api.node.chain.config,
-		budget: simulationGasBudget{remaining: maxSimulateGas}, traceTransfers: payload.TraceTransfers,
-		validate: payload.Validation, fullTx: payload.ReturnFullTransactions, timeIncrement: increment,
+		budget: simulationGasBudget{remaining: api.node.cfg.Limits.RPCGasCap}, traceTransfers: payload.TraceTransfers,
+		validate: payload.Validation, fullTx: payload.ReturnFullTransactions, timeIncrement: increment, responseBytes: 2,
 	}
-	simCtx, cancel := context.WithTimeout(ctx, simulateTimeout)
+	simCtx, cancel := api.node.withRPCTimeout(ctx)
 	defer cancel()
 	results, err := sim.execute(simCtx, payload.BlockStateCalls)
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return nil, &simulationRPCError{code: simErrTimeout, message: "simulation timed out"}
 	}
-	return results, err
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(results)
+	if err != nil {
+		return nil, err
+	}
+	if err := api.node.checkResponseBytes(len(encoded)); err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
 func (sim *simulator) execute(ctx context.Context, blocks []simulationBlock) ([]*simulationBlockResult, error) {
@@ -244,6 +253,19 @@ func (sim *simulator) execute(ctx context.Context, blocks []simulationBlock) ([]
 		}
 		headers[index] = block.Header()
 		results[index] = &simulationBlockResult{Block: block, Calls: calls, FullTx: sim.fullTx, Config: sim.config, Senders: senders}
+		encoded, err := json.Marshal(results[index])
+		if err != nil {
+			return nil, err
+		}
+		additional := uint64(len(encoded))
+		if index != 0 {
+			additional++
+		}
+		limit := uint64(sim.node.cfg.Limits.MaxResponseBytes)
+		if sim.responseBytes > limit || additional > limit-sim.responseBytes {
+			return nil, newResourceLimitError("simulation response bytes", sim.responseBytes+additional, limit)
+		}
+		sim.responseBytes += additional
 		parent = block.Header()
 	}
 	return results, nil

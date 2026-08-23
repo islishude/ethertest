@@ -58,6 +58,9 @@ func newEventLog(capacity uint64, db ethdb.Database) (*eventLog, error) {
 		}
 		log.events = append(log.events, event)
 		if event.Revision >= log.next {
+			if event.Revision == Revision(^uint64(0)) {
+				return nil, errors.New("persisted event revision overflows uint64")
+			}
 			log.next = event.Revision + 1
 		}
 	}
@@ -72,6 +75,9 @@ func (l *eventLog) plan(events []Event) (eventPlan, error) {
 	defer l.mu.RUnlock()
 	plan := eventPlan{events: append([]Event(nil), events...), next: l.next}
 	for index := range plan.events {
+		if plan.next == Revision(^uint64(0)) {
+			return eventPlan{}, errors.New("event revision overflows uint64")
+		}
 		plan.events[index].Revision = plan.next
 		encoded, err := json.Marshal(plan.events[index])
 		if err != nil {

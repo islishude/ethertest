@@ -8,7 +8,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/trie"
 )
 
 const maxWithdrawalsPerBlock = 16
@@ -34,12 +33,12 @@ func (n *Node) AddWithdrawal(ctx context.Context, request WithdrawalRequest) err
 	if request.Amount == 0 {
 		return ErrWithdrawalAmountZero
 	}
-	_, err := n.execute(ctx, func(chain *executionChain) (any, error) {
+	_, err := n.executeWrite(ctx, func(chain *executionChain) (any, error) {
 		if len(n.pendingWithdrawals) >= maxWithdrawalsPerBlock {
 			return nil, ErrWithdrawalQueueFull
 		}
 		n.pendingWithdrawals = append(n.pendingWithdrawals, request)
-		if err := n.rebuildPendingView(chain); err != nil {
+		if err := n.rebuildPendingView(ctx, chain); err != nil {
 			n.pendingWithdrawals = n.pendingWithdrawals[:len(n.pendingWithdrawals)-1]
 			return nil, err
 		}
@@ -84,23 +83,4 @@ func nextWithdrawalIndex(chain *core.BlockChain, parent *types.Block) (uint64, e
 		block = chain.GetBlock(block.ParentHash(), block.NumberU64()-1)
 	}
 	return 0, nil
-}
-
-func addWithdrawals(generator *core.BlockGen, withdrawals types.Withdrawals) {
-	for _, withdrawal := range withdrawals {
-		generator.AddWithdrawal(withdrawal)
-	}
-}
-
-// BlockGen assigns indices using only its local generation window. Rebuild the
-// body with ethertest's canonical-chain-derived indices while preserving the
-// state transition that BlockGen already applied for the same recipients and
-// amounts.
-func replaceGeneratedWithdrawals(block *types.Block, receipts types.Receipts, withdrawals types.Withdrawals) *types.Block {
-	if len(withdrawals) == 0 {
-		return block
-	}
-	body := block.Body()
-	body.Withdrawals = withdrawals
-	return types.NewBlock(block.Header(), body, receipts, trie.NewStackTrie(nil))
 }

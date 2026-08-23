@@ -1338,6 +1338,15 @@ func TestExecutionRequestPersistenceFailureDisablesWrites(t *testing.T) {
 	if exists, err := original.Has(executionRequestQueueKey); err != nil || exists {
 		t.Fatalf("failed persistence left queue record: exists=%v err=%v", exists, err)
 	}
+	if _, err := node.Snapshot(context.Background()); err == nil || !strings.Contains(err.Error(), "writes are disabled") {
+		t.Fatalf("snapshot after persistence failure = %v", err)
+	}
+	if _, err := node.Mine(context.Background(), 1, true); err == nil || !strings.Contains(err.Error(), "writes are disabled") {
+		t.Fatalf("mine after persistence failure = %v", err)
+	}
+	if node.currentMiningMode() != miningModeManual {
+		t.Fatalf("mining mode after persistence failure = %q", node.currentMiningMode())
+	}
 }
 
 func TestCorruptExecutionRequestMetadataFailsClosed(t *testing.T) {

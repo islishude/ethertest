@@ -84,6 +84,95 @@ func (b *consensusBlock) parentRoot() phase0.Root {
 	return b.electra.Message.ParentRoot
 }
 
+func (b *consensusBlock) executionHash() (common.Hash, error) {
+	if b.deneb != nil && b.deneb.Message != nil && b.deneb.Message.Body != nil && b.deneb.Message.Body.ExecutionPayload != nil {
+		return common.Hash(b.deneb.Message.Body.ExecutionPayload.BlockHash), nil
+	}
+	if b.electra != nil && b.electra.Message != nil && b.electra.Message.Body != nil && b.electra.Message.Body.ExecutionPayload != nil {
+		return common.Hash(b.electra.Message.Body.ExecutionPayload.BlockHash), nil
+	}
+	return common.Hash{}, errors.New("beacon projection has no execution payload")
+}
+
+func (m *consensusModel) validateProjectionObject(
+	chain *executionChain,
+	executionBlock *types.Block,
+	projection *consensusBlock,
+) error {
+	var requests *electra.ExecutionRequests
+	if executionBlock.NumberU64() != 0 {
+		record, exists, err := loadExecutionRequestRecord(chain, executionBlock.Hash())
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return errors.New("beacon projection has no execution request record")
+		}
+		requests, err = parseExecutionRequests(record.Requests)
+		if err != nil {
+			return err
+		}
+	}
+	slot := chain.slotOf(executionBlock)
+	expectedBody, err := m.body(chain, executionBlock, slot, requests)
+	if err != nil {
+		return err
+	}
+	var stateInput [40]byte
+	copy(stateInput[:32], executionBlock.Root().Bytes())
+	binary.LittleEndian.PutUint64(stateInput[32:], slot)
+	expectedStateRoot := phase0.Root(sha256.Sum256(stateInput[:]))
+	expectedProposer := phase0.ValidatorIndex(slot % uint64(len(m.keys)))
+	var objectRoot phase0.Root
+	var signature phase0.BLSSignature
+	if projection.deneb != nil {
+		expectedDenebBody := denebBodyFromElectra(expectedBody)
+		expectedBodyRoot, err := expectedDenebBody.HashTreeRoot()
+		if err != nil {
+			return err
+		}
+		actualBodyRoot, err := projection.deneb.Message.Body.HashTreeRoot()
+		if err != nil {
+			return err
+		}
+		if expectedBodyRoot != actualBodyRoot || uint64(projection.deneb.Message.Slot) != slot ||
+			projection.deneb.Message.ProposerIndex != expectedProposer || projection.deneb.Message.StateRoot != expectedStateRoot {
+			return errors.New("deneb projection does not match its execution block")
+		}
+		objectRoot, err = projection.deneb.Message.HashTreeRoot()
+		signature = projection.deneb.Signature
+		if err != nil {
+			return err
+		}
+	} else {
+		expectedBodyRoot, err := expectedBody.HashTreeRoot()
+		if err != nil {
+			return err
+		}
+		actualBodyRoot, err := projection.electra.Message.Body.HashTreeRoot()
+		if err != nil {
+			return err
+		}
+		if expectedBodyRoot != actualBodyRoot || uint64(projection.electra.Message.Slot) != slot ||
+			projection.electra.Message.ProposerIndex != expectedProposer || projection.electra.Message.StateRoot != expectedStateRoot {
+			return errors.New("electra/fulu projection does not match its execution block")
+		}
+		objectRoot, err = projection.electra.Message.HashTreeRoot()
+		signature = projection.electra.Signature
+		if err != nil {
+			return err
+		}
+	}
+	expectedSignature, err := m.sign(objectRoot, phase0.DomainType{}, uint64(expectedProposer), slot)
+	if err != nil {
+		return err
+	}
+	if signature != expectedSignature {
+		return errors.New("beacon projection has an invalid synthetic proposer signature")
+	}
+	return nil
+}
+
 func newConsensusModel(cfg Config, executionAddresses []common.Address) (*consensusModel, error) {
 	model := &consensusModel{
 		keys:                  make([]*bls.SecretKey, cfg.Chain.Validators),
@@ -350,10 +439,12 @@ func (m *consensusModel) body(
 			return nil, err
 		}
 		transactions[index] = raw
-		if sidecar := chain.blobSidecar(transaction.Hash()); sidecar != nil {
+		if sidecar := chain.blobSidecarForVersion(transaction.Hash(), types.BlobSidecarVersion1); sidecar != nil {
 			for _, commitment := range sidecar.Commitments {
 				commitments = append(commitments, deneb.KZGCommitment(commitment))
 			}
+		} else if len(transaction.BlobHashes()) != 0 {
+			return nil, fmt.Errorf("blob transaction %s has no valid retained bundle", transaction.Hash())
 		}
 	}
 	withdrawals := make([]*capella.Withdrawal, len(block.Withdrawals()))

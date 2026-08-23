@@ -84,6 +84,8 @@ func (api *debugAPI) GetRawTransaction(_ context.Context, hash common.Hash) (hex
 }
 
 func (api *debugAPI) TraceCall(ctx context.Context, args callArgs, selector rpc.BlockNumberOrHash, config *traceConfig) (json.RawMessage, error) {
+	ctx, cancel := api.node.withRPCTimeout(ctx)
+	defer cancel()
 	if config == nil || config.Tracer == nil {
 		loggerConfig := new(logger.Config)
 		if config != nil {
@@ -91,13 +93,23 @@ func (api *debugAPI) TraceCall(ctx context.Context, args callArgs, selector rpc.
 			loggerConfig.DisableStack = config.DisableStack
 			loggerConfig.DisableStorage = config.DisableStorage
 			loggerConfig.EnableReturnData = config.EnableReturnData
-			loggerConfig.Limit = config.Limit
+			if config.Limit < 0 {
+				return nil, &invalidParamsError{message: "trace limit cannot be negative"}
+			}
+			loggerConfig.Limit = min(config.Limit, int(api.node.cfg.Limits.MaxResponseBytes))
+		}
+		if loggerConfig.Limit == 0 {
+			loggerConfig.Limit = int(api.node.cfg.Limits.MaxResponseBytes)
 		}
 		tracer := logger.NewStructLogger(loggerConfig)
 		if _, err := (&ethAPI{node: api.node}).executeCallWithTracer(ctx, args, selector, 0, nil, tracer.Hooks()); err != nil {
 			return nil, err
 		}
-		return tracer.GetResult()
+		result, err := tracer.GetResult()
+		if err == nil {
+			err = api.node.checkResponseBytes(len(result))
+		}
+		return result, err
 	}
 	if tracers.DefaultDirectory.IsJS(*config.Tracer) {
 		return nil, errors.New("JavaScript tracers are not supported")
@@ -110,7 +122,11 @@ func (api *debugAPI) TraceCall(ctx context.Context, args callArgs, selector rpc.
 		tracer.Stop(err)
 		return nil, err
 	}
-	return tracer.GetResult()
+	result, err := tracer.GetResult()
+	if err == nil {
+		err = api.node.checkResponseBytes(len(result))
+	}
+	return result, err
 }
 
 func (api *debugAPI) TraceTransaction(ctx context.Context, hash common.Hash, config *traceConfig) (json.RawMessage, error) {
@@ -152,6 +168,8 @@ func (api *debugAPI) TraceBlockByNumber(ctx context.Context, number rpc.BlockNum
 }
 
 func (api *debugAPI) traceBlock(ctx context.Context, block *types.Block, config *traceConfig, target *uint64) ([]*traceResult, error) {
+	ctx, cancel := api.node.withRPCTimeout(ctx)
+	defer cancel()
 	if block.NumberU64() == 0 {
 		return nil, errors.New("genesis is not traceable")
 	}
@@ -201,7 +219,15 @@ func (api *debugAPI) traceBlock(ctx context.Context, block *types.Block, config 
 			message, gasPool, state, block.Number(), block.Hash(), block.Time(), tx, evm,
 		)
 		stop()
+		cancelled := evm.Cancelled() || errors.Is(ctx.Err(), context.DeadlineExceeded)
 		evm.Release()
+		if cancelled {
+			timeoutErr := &rpcTimeoutError{message: "trace execution timed out"}
+			if traceThis {
+				stopTracer(timeoutErr)
+			}
+			return nil, timeoutErr
+		}
 		if applyErr != nil {
 			if traceThis {
 				stopTracer(applyErr)
@@ -216,6 +242,13 @@ func (api *debugAPI) traceBlock(ctx context.Context, block *types.Block, config 
 			results = append(results, &traceResult{TxHash: tx.Hash(), Result: result})
 		}
 	}
+	encoded, err := json.Marshal(results)
+	if err != nil {
+		return nil, err
+	}
+	if err := api.node.checkResponseBytes(len(encoded)); err != nil {
+		return nil, err
+	}
 	return results, nil
 }
 
@@ -223,9 +256,15 @@ func (api *debugAPI) newTracer(config *traceConfig, block *types.Block, index in
 	if config == nil || config.Tracer == nil {
 		loggerConfig := new(logger.Config)
 		if config != nil {
+			if config.Limit < 0 {
+				return nil, nil, nil, &invalidParamsError{message: "trace limit cannot be negative"}
+			}
 			loggerConfig.EnableMemory, loggerConfig.DisableStack = config.EnableMemory, config.DisableStack
 			loggerConfig.DisableStorage, loggerConfig.EnableReturnData = config.DisableStorage, config.EnableReturnData
-			loggerConfig.Limit = config.Limit
+			loggerConfig.Limit = min(config.Limit, int(api.node.cfg.Limits.MaxResponseBytes))
+		}
+		if loggerConfig.Limit == 0 {
+			loggerConfig.Limit = int(api.node.cfg.Limits.MaxResponseBytes)
 		}
 		structured := logger.NewStructLogger(loggerConfig)
 		return structured.Hooks(), structured.GetResult, func(error) {}, nil

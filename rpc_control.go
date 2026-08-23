@@ -10,7 +10,7 @@ import (
 
 func (api *controlAPI) Capabilities() map[string]any {
 	return map[string]any{
-		"version": Version, "status": "alpha", "fork": "osaka/fulu", "syntheticFinality": true,
+		"version": Version, "status": "alpha", "fork": api.node.consensus.forkName(api.node.chain.currentSlot()), "syntheticFinality": true,
 		"finalityControls":         true,
 		"authorizationSigning":     true,
 		"executionRequests":        true,
@@ -19,7 +19,7 @@ func (api *controlAPI) Capabilities() map[string]any {
 		"forkTransitions": []string{"deneb", "electra", "fulu"},
 		"blobCodecs":      []string{"canonical-blob", "packed-bytes-v1"},
 		"p2p":             false, "engineAPI": false, "javascriptTracers": false,
-		"ipc":             true,
+		"ipc":             api.node.ipcEndpoint != "",
 		"releaseComplete": false,
 	}
 }
@@ -75,20 +75,13 @@ func (api *controlAPI) BranchSwitch(ctx context.Context, name string) (bool, err
 	return true, api.node.SwitchBranch(ctx, name)
 }
 func (api *controlAPI) NetworkConfig() map[string]any {
-	executionAddress := ""
-	beaconAddress := ""
-	if api.node.cfg.HTTP.Enabled {
-		executionAddress = api.node.cfg.HTTP.Address
-		if api.node.cfg.Beacon.Enabled {
-			beaconAddress = executionAddress
-		}
-	}
+	endpoints := api.node.Endpoints()
 	return map[string]any{
 		"chainId": api.node.cfg.Chain.ChainID, "networkId": api.node.cfg.Chain.NetworkID,
 		"genesisTime":   api.node.cfg.Chain.GenesisTime,
 		"slotDuration":  api.node.cfg.Chain.SlotDuration.String(),
 		"slotsPerEpoch": api.node.cfg.Chain.SlotsPerEpoch,
-		"el":            executionAddress, "beacon": beaconAddress, "ipc": api.node.cfg.IPCEndpoint(),
+		"el":            endpoints.Execution, "beacon": endpoints.Beacon, "ipc": endpoints.IPC,
 		"consensusMode": "synthetic", "beaconApi": "v4-subset",
 		"fullConsensus": false, "releaseComplete": false,
 	}

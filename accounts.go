@@ -17,6 +17,9 @@ type Account struct {
 }
 
 func DeriveAccounts(mnemonic string, count int) ([]Account, error) {
+	if count < 1 || count > 1024 {
+		return nil, fmt.Errorf("account count must be between 1 and 1024")
+	}
 	if !bip39.IsMnemonicValid(mnemonic) {
 		return nil, fmt.Errorf("invalid BIP-39 mnemonic")
 	}

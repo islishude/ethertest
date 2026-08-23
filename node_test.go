@@ -638,6 +638,39 @@ func TestBeaconSSEStreamsFutureEvents(t *testing.T) {
 	}
 }
 
+func TestCloseCancelsActiveBeaconSSE(t *testing.T) {
+	cfg := testConfig()
+	cfg.HTTP.Enabled = true
+	cfg.HTTP.Address = "127.0.0.1:0"
+	cfg.Beacon.Enabled = true
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodGet, node.Endpoints().Beacon+"/eth/v1/events?topics=block", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close() //nolint:errcheck
+	closed := make(chan error, 1)
+	go func() { closed <- node.Close() }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not cancel active Beacon SSE")
+	}
+}
+
 func TestEndpointDiscoveryAndDisabledBeaconRouting(t *testing.T) {
 	cfg := testConfig()
 	cfg.HTTP.Enabled = true
@@ -676,6 +709,175 @@ func TestEndpointDiscoveryAndDisabledBeaconRouting(t *testing.T) {
 		t.Fatalf("disabled HTTP endpoints = %#v", endpoints)
 	}
 	if err := offline.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHTTPAndWebSocketRequestLimits(t *testing.T) {
+	cfg := testConfig()
+	cfg.HTTP.Enabled = true
+	cfg.HTTP.Address = "127.0.0.1:0"
+	cfg.Limits.MaxRequestBytes = 256
+	cfg.Limits.MaxResponseBytes = 256
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+	response, err := http.Post(
+		node.Endpoints().Execution, "application/json", strings.NewReader(strings.Repeat(" ", 300)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized HTTP request status = %d", response.StatusCode)
+	}
+	websocketEndpoint := "ws" + strings.TrimPrefix(node.Endpoints().Execution, "http")
+	client, err := rpc.DialWebsocket(t.Context(), websocketEndpoint, "http://localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var chainID hexutil.Uint64
+	if err := client.Call(&chainID, "eth_chainId"); err != nil {
+		t.Fatal(err)
+	}
+	var hash common.Hash
+	if err := client.Call(&hash, "web3_sha3", hexutil.Bytes(make([]byte, 512))); err == nil {
+		t.Fatal("oversized WebSocket request was accepted")
+	}
+	requestBody := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"eth_accounts","params":[]}`)
+	response, err = http.Post(node.Endpoints().Execution, "application/json", requestBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized HTTP response status = %d", response.StatusCode)
+	}
+	var accounts []common.Address
+	if err := client.Call(&accounts, "eth_accounts"); err == nil {
+		t.Fatal("oversized WebSocket response was accepted")
+	}
+}
+
+func TestLifecycleIsOneShotAndControlLimitsAreRecoverable(t *testing.T) {
+	node, err := New(testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); !errors.Is(err, ErrNodeStopped) {
+		t.Fatalf("start after close = %v", err)
+	}
+	if err := node.Close(); err != nil {
+		t.Fatalf("second close = %v", err)
+	}
+
+	running, err := New(testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := running.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer running.Close() //nolint:errcheck
+	tooMany := running.cfg.Limits.MaxControlOperations + 1
+	if _, err := running.Mine(context.Background(), tooMany, true); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("oversized mine = %v", err)
+	}
+	if _, err := running.MissSlots(context.Background(), tooMany); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("oversized miss slots = %v", err)
+	}
+	changes := make(ControlChanges, tooMany)
+	balance := big.NewInt(1)
+	for index := range tooMany {
+		changes[common.BigToAddress(new(big.Int).SetUint64(index+1))] = AccountChanges{Balance: balance}
+	}
+	if _, err := running.ApplyControl(context.Background(), changes); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("oversized control set = %v", err)
+	}
+	if _, err := running.Mine(context.Background(), 1, true); err != nil {
+		t.Fatalf("node unusable after rejected limit: %v", err)
+	}
+}
+
+func TestConcurrentStartAndCloseHasDeterministicTerminalState(t *testing.T) {
+	for range 20 {
+		node, err := New(testConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		startErr := make(chan error, 1)
+		closeErr := make(chan error, 1)
+		go func() { startErr <- node.Start() }()
+		go func() { closeErr <- node.Close() }()
+		if err := <-startErr; err != nil && !errors.Is(err, ErrNodeStopped) {
+			t.Fatalf("concurrent Start = %v", err)
+		}
+		if err := <-closeErr; err != nil {
+			t.Fatalf("concurrent Close = %v", err)
+		}
+		if err := node.Start(); !errors.Is(err, ErrNodeStopped) {
+			t.Fatalf("terminal Start = %v", err)
+		}
+		if err := node.Close(); err != nil {
+			t.Fatalf("terminal Close = %v", err)
+		}
+	}
+}
+
+func TestCommandPanicFailsStoppedWithoutCrashingProcess(t *testing.T) {
+	node, err := New(testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = node.executeWrite(context.Background(), func(*executionChain) (any, error) {
+		panic("injected command panic")
+	})
+	if err == nil || !strings.Contains(err.Error(), "single-writer command panicked") {
+		t.Fatalf("command panic error = %v", err)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := node.Wait(waitCtx); err == nil || !strings.Contains(err.Error(), "single-writer command panicked") {
+		t.Fatalf("Wait panic error = %v", err)
+	}
+	if err := node.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUnexpectedHTTPListenerFailureIsReportedByWait(t *testing.T) {
+	cfg := testConfig()
+	cfg.HTTP.Enabled = true
+	cfg.HTTP.Address = "127.0.0.1:0"
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := node.httpListener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := node.Wait(waitCtx); err == nil {
+		t.Fatal("Wait did not report unexpected HTTP listener failure")
+	}
+	if err := node.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -874,6 +1076,22 @@ func TestVerifiableZeroTransactionControlBlock(t *testing.T) {
 	}
 	if valid, err := node.VerifyControlBlock(context.Background(), hash); err != nil || !valid {
 		t.Fatalf("control verification valid=%v err=%v", valid, err)
+	}
+}
+
+func TestApplyControlRejectsNegativeBalance(t *testing.T) {
+	node, err := New(testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+	if _, err := node.ApplyControl(context.Background(), ControlChanges{
+		node.Accounts()[0]: {Balance: big.NewInt(-1)},
+	}); err == nil {
+		t.Fatal("negative control balance was accepted")
 	}
 }
 

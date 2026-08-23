@@ -16,6 +16,8 @@ import (
 )
 
 func (api *ethAPI) Call(ctx context.Context, args callArgs, selector *rpc.BlockNumberOrHash, overrides *stateOverride) (hexutil.Bytes, error) {
+	ctx, cancel := api.node.withRPCTimeout(ctx)
+	defer cancel()
 	blockSelector := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
 	if selector != nil {
 		blockSelector = *selector
@@ -27,10 +29,19 @@ func (api *ethAPI) Call(ctx context.Context, args callArgs, selector *rpc.BlockN
 	if result.Failed() {
 		return nil, result.Err
 	}
-	return result.Return(), nil
+	output := result.Return()
+	encodedSize := uint64(len(output))*2 + 4 // JSON string quotes plus 0x prefix.
+	if encodedSize > uint64(api.node.cfg.Limits.MaxResponseBytes) {
+		return nil, newResourceLimitError(
+			"eth_call response bytes", encodedSize, uint64(api.node.cfg.Limits.MaxResponseBytes),
+		)
+	}
+	return output, nil
 }
 
 func (api *ethAPI) EstimateGas(ctx context.Context, args callArgs, selector *rpc.BlockNumberOrHash, overrides *stateOverride) (hexutil.Uint64, error) {
+	ctx, cancel := api.node.withRPCTimeout(ctx)
+	defer cancel()
 	blockSelector := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
 	if selector != nil {
 		blockSelector = *selector
@@ -40,13 +51,28 @@ func (api *ethAPI) EstimateGas(ctx context.Context, args callArgs, selector *rpc
 		return 0, err
 	}
 	low, high := uint64(21_000), header.GasLimit
-	if args.Gas != nil && uint64(*args.Gas) < high {
-		high = uint64(*args.Gas)
+	if args.Gas != nil {
+		if uint64(*args.Gas) > api.node.cfg.Limits.RPCGasCap {
+			return 0, newResourceLimitError("RPC gas", uint64(*args.Gas), api.node.cfg.Limits.RPCGasCap)
+		}
+		if uint64(*args.Gas) < high {
+			high = uint64(*args.Gas)
+		}
+	} else if high > api.node.cfg.Limits.RPCGasCap {
+		high = api.node.cfg.Limits.RPCGasCap
 	}
 	for low < high {
 		mid := low + (high-low)/2
 		result, callErr := api.executeCallAt(ctx, args, header, state, mid, overrides, nil)
-		if callErr != nil || result.Failed() {
+		if callErr != nil {
+			if errors.Is(callErr, core.ErrIntrinsicGas) || errors.Is(callErr, core.ErrFloorDataGas) ||
+				errors.Is(callErr, core.ErrGasLimitReached) {
+				low = mid + 1
+				continue
+			}
+			return 0, callErr
+		}
+		if result.Failed() {
 			low = mid + 1
 		} else {
 			high = mid
@@ -114,8 +140,16 @@ func (api *ethAPI) executeCallAt(ctx context.Context, args callArgs, header *typ
 	gas := header.GasLimit
 	if args.Gas != nil {
 		gas = uint64(*args.Gas)
+		if gas > api.node.cfg.Limits.RPCGasCap {
+			return nil, newResourceLimitError("RPC gas", gas, api.node.cfg.Limits.RPCGasCap)
+		}
+	} else if gas > api.node.cfg.Limits.RPCGasCap {
+		gas = api.node.cfg.Limits.RPCGasCap
 	}
 	if gasOverride != 0 {
+		if gasOverride > api.node.cfg.Limits.RPCGasCap {
+			return nil, newResourceLimitError("RPC gas", gasOverride, api.node.cfg.Limits.RPCGasCap)
+		}
 		gas = gasOverride
 	}
 	value := new(big.Int)
@@ -192,5 +226,9 @@ func (api *ethAPI) executeCallAt(ctx context.Context, args callArgs, header *typ
 	evm.SetTxContext(core.NewEVMTxContext(message))
 	stop := context.AfterFunc(ctx, evm.Cancel)
 	defer stop()
-	return core.ApplyMessage(evm, message, core.NewGasPool(gas))
+	result, err := core.ApplyMessage(evm, message, core.NewGasPool(gas))
+	if evm.Cancelled() || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return nil, &rpcTimeoutError{message: "RPC execution timed out"}
+	}
+	return result, err
 }

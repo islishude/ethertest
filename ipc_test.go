@@ -3,18 +3,39 @@ package ethertest
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 )
+
+func TestBoundedIPCFramesAdjacentJSONValuesWithoutNewlines(t *testing.T) {
+	server, client := net.Pipe()
+	defer func() { _ = server.Close() }()
+	go func() {
+		_, _ = client.Write([]byte(`{"text":"}"}[1,{"text":"["}]`))
+		_ = client.Close()
+	}()
+	decoder := json.NewDecoder(newBoundedIPCConn(server, 128, 128))
+	var first map[string]string
+	if err := decoder.Decode(&first); err != nil || first["text"] != "}" {
+		t.Fatalf("first adjacent IPC value = %#v, %v", first, err)
+	}
+	var second []any
+	if err := decoder.Decode(&second); err != nil || len(second) != 2 {
+		t.Fatalf("second adjacent IPC value = %#v, %v", second, err)
+	}
+}
 
 func ipcTestConfig(t *testing.T) Config {
 	t.Helper()
@@ -146,6 +167,43 @@ func TestHTTPAndIPCShareChainState(t *testing.T) {
 	}
 }
 
+func TestIPCRequestLimit(t *testing.T) {
+	cfg := ipcTestConfig(t)
+	cfg.Limits.MaxRequestBytes = 256
+	cfg.Limits.MaxResponseBytes = 256
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+	client, err := rpc.DialIPC(t.Context(), node.Endpoints().IPC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var chainID hexutil.Uint64
+	if err := client.Call(&chainID, "eth_chainId"); err != nil {
+		t.Fatal(err)
+	}
+	var output hexutil.Bytes
+	if err := client.Call(&output, "web3_sha3", hexutil.Bytes(make([]byte, 512))); err == nil {
+		t.Fatal("oversized IPC request was accepted")
+	}
+	client.Close()
+	client, err = rpc.DialIPC(t.Context(), node.Endpoints().IPC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var accounts []common.Address
+	if err := client.Call(&accounts, "eth_accounts"); err == nil {
+		t.Fatal("oversized IPC response was accepted")
+	}
+}
+
 func TestIPCLifecycleAndPermissions(t *testing.T) {
 	cfg := ipcTestConfig(t)
 	endpoint := cfg.IPCEndpoint()
@@ -209,6 +267,71 @@ func TestIPCStartupFailureStopsNode(t *testing.T) {
 	}
 }
 
+func TestIPCRefusesFilesAndLiveSocketsButRemovesStaleSocket(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix socket semantics")
+	}
+	t.Run("regular file", func(t *testing.T) {
+		cfg := ipcTestConfig(t)
+		endpoint := cfg.IPCEndpoint()
+		if err := os.WriteFile(endpoint, []byte("keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		node, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := node.Start(); err == nil {
+			t.Fatal("IPC replaced a regular file")
+		}
+		contents, err := os.ReadFile(endpoint)
+		if err != nil || string(contents) != "keep" {
+			t.Fatalf("regular file changed: %q %v", contents, err)
+		}
+	})
+	t.Run("live socket", func(t *testing.T) {
+		cfg := ipcTestConfig(t)
+		endpoint := cfg.IPCEndpoint()
+		listener, err := net.Listen("unix", endpoint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer listener.Close() //nolint:errcheck
+		node, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := node.Start(); err == nil {
+			t.Fatal("IPC replaced a live socket")
+		}
+		if _, err := os.Stat(endpoint); err != nil {
+			t.Fatalf("live socket was removed: %v", err)
+		}
+	})
+	t.Run("stale socket", func(t *testing.T) {
+		cfg := ipcTestConfig(t)
+		endpoint := cfg.IPCEndpoint()
+		listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: endpoint, Net: "unix"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		listener.SetUnlinkOnClose(false)
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+		node, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := node.Start(); err != nil {
+			t.Fatalf("stale IPC socket was not replaced: %v", err)
+		}
+		if err := node.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 func TestIPCUnexpectedListenerFailureIsVisible(t *testing.T) {
 	var output bytes.Buffer
 	cfg := ipcTestConfig(t)
@@ -222,10 +345,10 @@ func TestIPCUnexpectedListenerFailureIsVisible(t *testing.T) {
 	if err := node.ipcListener.Close(); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-node.stopping:
-	case <-time.After(time.Second):
-		t.Fatal("node did not stop after an unexpected IPC listener failure")
+	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := node.Wait(waitCtx); err == nil {
+		t.Fatal("Wait did not report unexpected IPC listener failure")
 	}
 	if loggedEvents(t, output.String())["ipc_server_failed"] != 1 {
 		t.Fatalf("missing IPC server failure event:\n%s", output.String())

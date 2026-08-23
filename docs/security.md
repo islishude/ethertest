@@ -7,6 +7,10 @@ RPC methods are unauthenticated. Never use funded production keys and never
 expose the default listener to an untrusted network. Binding a non-loopback
 address requires the explicit `--allow-unsafe-external` flag.
 
+Configured request, response, gas, trace, log, filter, subscription, and control
+limits apply before untrusted work can allocate unbounded memory or monopolize
+the single writer. Unix IPC refuses to overwrite non-socket or live endpoints.
+
 Human startup output on stderr includes every unlocked private key. Structured
 logs on stdout, metrics, errors, state manifests, and default state archives
 must never contain private keys, mnemonics, raw transaction data, or

@@ -79,7 +79,7 @@ func (n *Node) FinalityStatus() FinalityStatus {
 // PauseFinality freezes synthetic safe/finalized resolution at the current
 // slot while block production and missed-slot processing continue.
 func (n *Node) PauseFinality(ctx context.Context) error {
-	_, err := n.execute(ctx, func(chain *executionChain) (any, error) {
+	_, err := n.executeWrite(ctx, func(chain *executionChain) (any, error) {
 		chain.mu.RLock()
 		if chain.finalityPaused {
 			chain.mu.RUnlock()
@@ -119,7 +119,7 @@ func (n *Node) PauseFinality(ctx context.Context) error {
 // ResumeFinality resumes slot-derived finality and immediately catches the
 // projection up to the current slot.
 func (n *Node) ResumeFinality(ctx context.Context) error {
-	_, err := n.execute(ctx, func(chain *executionChain) (any, error) {
+	_, err := n.executeWrite(ctx, func(chain *executionChain) (any, error) {
 		chain.mu.RLock()
 		if !chain.finalityPaused {
 			chain.mu.RUnlock()

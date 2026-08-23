@@ -11,7 +11,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
-	"github.com/holiman/uint256"
 )
 
 const (
@@ -84,11 +83,40 @@ func SignBlobTransaction(request BlobTransactionRequest, key *ecdsa.PrivateKey) 
 	if request.ChainID == nil || request.GasTipCap == nil || request.GasFeeCap == nil || request.BlobFeeCap == nil {
 		return nil, errors.New("chain ID and fee caps are required")
 	}
+	if key == nil {
+		return nil, errors.New("private key is required")
+	}
+	chainID, err := checkedU256("chainId", request.ChainID)
+	if err != nil || chainID.IsZero() {
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("chainId must be positive")
+	}
+	tip, err := checkedU256("maxPriorityFeePerGas", request.GasTipCap)
+	if err != nil {
+		return nil, err
+	}
+	fee, err := checkedU256("maxFeePerGas", request.GasFeeCap)
+	if err != nil {
+		return nil, err
+	}
+	if fee.Cmp(tip) < 0 {
+		return nil, errors.New("maxFeePerGas is lower than maxPriorityFeePerGas")
+	}
+	blobFee, err := checkedU256("maxFeePerBlobGas", request.BlobFeeCap)
+	if err != nil {
+		return nil, err
+	}
 	if request.Gas == 0 {
 		request.Gas = 21_000
 	}
 	if request.Value == nil {
 		request.Value = new(big.Int)
+	}
+	value, err := checkedU256("value", request.Value)
+	if err != nil {
+		return nil, err
 	}
 	commitment, err := kzg4844.BlobToCommitment(&request.Blob)
 	if err != nil {
@@ -105,10 +133,10 @@ func SignBlobTransaction(request BlobTransactionRequest, key *ecdsa.PrivateKey) 
 		proofs,
 	)
 	tx := types.NewTx(&types.BlobTx{
-		ChainID: uint256.MustFromBig(request.ChainID), Nonce: request.Nonce,
-		GasTipCap: uint256.MustFromBig(request.GasTipCap), GasFeeCap: uint256.MustFromBig(request.GasFeeCap),
-		Gas: request.Gas, To: request.To, Value: uint256.MustFromBig(request.Value),
-		Data: request.Data, BlobFeeCap: uint256.MustFromBig(request.BlobFeeCap),
+		ChainID: chainID, Nonce: request.Nonce,
+		GasTipCap: tip, GasFeeCap: fee,
+		Gas: request.Gas, To: request.To, Value: value,
+		Data: request.Data, BlobFeeCap: blobFee,
 		BlobHashes: sidecar.BlobHashes(), Sidecar: sidecar,
 	})
 	return types.SignTx(tx, types.LatestSignerForChainID(request.ChainID), key)

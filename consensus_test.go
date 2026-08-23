@@ -11,7 +11,9 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/deneb"
 	"github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/rpc"
 	bls "github.com/protolambda/bls12-381-util"
 )
@@ -93,7 +95,7 @@ func TestBeaconJSONAndSSZContentNegotiation(t *testing.T) {
 	if err := httpRPC.Call(&networkConfig, "ethertest_networkConfig"); err != nil {
 		t.Fatal(err)
 	}
-	if networkConfig["el"] != cfg.HTTP.Address || networkConfig["beacon"] != cfg.HTTP.Address {
+	if networkConfig["el"] != endpoint || networkConfig["beacon"] != endpoint {
 		t.Fatalf("network config endpoints = %#v", networkConfig)
 	}
 
@@ -184,6 +186,22 @@ func TestDenebElectraFuluForkBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer node.Close() //nolint:errcheck
+	assertMatchesProcessor := func(blockHashIndex int, hashes []common.Hash) {
+		t.Helper()
+		block := node.chain.blockchain.GetBlockByHash(hashes[blockHashIndex])
+		parent := node.chain.blockchain.GetBlock(block.ParentHash(), block.NumberU64()-1)
+		state, err := node.chain.blockchain.StateAt(parent.Header())
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := node.chain.blockchain.Processor().Process(t.Context(), block, state, nil, vm.Config{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := node.chain.blockchain.Validator().ValidateState(block, state, result, false); err != nil {
+			t.Fatalf("direct builder differs from geth processor at block %d: %v", block.NumberU64(), err)
+		}
+	}
 
 	genesis := node.chain.blockchain.GetBlockByNumber(0)
 	signed, err := node.consensus.signedBlock(node.chain, genesis)
@@ -206,6 +224,8 @@ func TestDenebElectraFuluForkBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertMatchesProcessor(0, hashes)
+	assertMatchesProcessor(7, hashes)
 	prague := node.chain.blockchain.GetBlockByHash(hashes[7])
 	signed, err = node.consensus.signedBlock(node.chain, prague)
 	if err != nil {
@@ -223,9 +243,11 @@ func TestDenebElectraFuluForkBoundaries(t *testing.T) {
 		t.Fatal("Prague boundary did not use Electra")
 	}
 
-	if _, err := node.Mine(context.Background(), 8, true); err != nil {
+	fuluHashes, err := node.Mine(context.Background(), 8, true)
+	if err != nil {
 		t.Fatal(err)
 	}
+	assertMatchesProcessor(7, fuluHashes)
 	if node.consensus.forkName(16) != "fulu" {
 		t.Fatal("Osaka boundary did not report Fulu")
 	}

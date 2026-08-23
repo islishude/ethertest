@@ -219,13 +219,13 @@ func (n *Node) ImportAccount(ctx context.Context, privateKey *ecdsa.PrivateKey, 
 			return ImportAccountResult{}, errors.New("account balance exceeds uint256")
 		}
 	}
-	value, err := n.execute(ctx, func(chain *executionChain) (any, error) {
+	value, err := n.executeWrite(ctx, func(chain *executionChain) (any, error) {
 		if n.wallet.contains(address) {
 			return ImportAccountResult{}, errAccountAlreadyManaged
 		}
 		result := ImportAccountResult{Address: address}
 		if requestedBalance != nil {
-			hash, applyErr := n.applyControl(chain, ControlChanges{address: {Balance: requestedBalance}})
+			hash, applyErr := n.applyControl(ctx, chain, ControlChanges{address: {Balance: requestedBalance}})
 			if applyErr != nil {
 				return ImportAccountResult{}, applyErr
 			}
@@ -250,7 +250,7 @@ func (n *Node) ImportAccount(ctx context.Context, privateKey *ecdsa.PrivateKey, 
 // RemoveAccount removes only a runtime-imported signer. It does not modify the
 // corresponding execution account state.
 func (n *Node) RemoveAccount(ctx context.Context, address common.Address) (bool, error) {
-	value, err := n.execute(ctx, func(_ *executionChain) (any, error) {
+	value, err := n.executeWrite(ctx, func(_ *executionChain) (any, error) {
 		removed, removeErr := n.wallet.remove(address)
 		if removeErr != nil {
 			return false, removeErr

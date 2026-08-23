@@ -1,6 +1,6 @@
 module github.com/islishude/ethertest
 
-go 1.26.0
+go 1.27.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -9,6 +9,7 @@ require (
 	github.com/attestantio/go-eth2-client v0.29.0
 	github.com/ethereum/go-ethereum v1.17.5
 	github.com/golang/snappy v1.0.1-0.20260716114414-9ae09f520e93
+	github.com/gorilla/websocket v1.4.2
 	github.com/holiman/uint256 v1.3.2
 	github.com/klauspost/compress v1.19.1
 	github.com/protolambda/bls12-381-util v0.1.0
@@ -38,7 +39,7 @@ require (
 	github.com/cockroachdb/pebble v1.1.5 // indirect
 	github.com/cockroachdb/pebble/v2 v2.1.4 // indirect
 	github.com/cockroachdb/redact v1.1.5 // indirect
-	github.com/cockroachdb/swiss v0.0.0-20251224182025-b0f6560f979b // indirect
+	github.com/cockroachdb/swiss v0.0.0-20260820225851-333444432258 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 // indirect
 	github.com/consensys/gnark-crypto v0.18.1 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
@@ -60,7 +61,6 @@ require (
 	github.com/gofrs/flock v0.12.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/holiman/bloomfilter/v2 v2.0.3 // indirect
 	github.com/huin/goupnp v1.3.0 // indirect
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect

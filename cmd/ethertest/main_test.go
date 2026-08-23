@@ -103,7 +103,7 @@ func TestGenesisCommandLineConfigurationIsAuthoritative(t *testing.T) {
 	summary := networkDescription(cfg)
 	forkEpochs, ok := summary["forkEpochs"].(map[string]uint64)
 	if !ok || summary["chainId"] != uint64(4242) || summary["networkId"] != uint64(777) ||
-		summary["gasLimit"] != uint64(30_000_000) || summary["fork"] != "cancun/deneb" ||
+		summary["gasLimit"] != uint64(30_000_000) || summary["fork"] != "deneb" ||
 		forkEpochs["prague"] != 1 || forkEpochs["osaka"] != 2 {
 		t.Fatalf("network description = %#v", summary)
 	}

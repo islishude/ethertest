@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -136,8 +137,12 @@ func runNode(ctx *cli.Context) error {
 	printDevelopmentAccounts(os.Stderr, cfg)
 	signalContext, stop := signal.NotifyContext(ctx.Context, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	<-signalContext.Done()
-	return node.Close()
+	waitErr := node.Wait(signalContext)
+	closeErr := node.Close()
+	if errors.Is(waitErr, context.Canceled) {
+		waitErr = nil
+	}
+	return errors.Join(waitErr, closeErr)
 }
 
 // printDevelopmentAccounts is intentionally separate from structured runtime
@@ -210,13 +215,7 @@ func writeEffectiveConfig(output io.Writer, cfg ethertest.Config) error {
 
 func networkDescription(cfg ethertest.Config) map[string]any {
 	executionEndpoint, beaconEndpoint, ipcEndpoint := configuredEndpoints(cfg)
-	fork := "cancun/deneb"
-	if cfg.Chain.Forks.PragueEpoch == 0 {
-		fork = "prague/electra"
-	}
-	if cfg.Chain.Forks.OsakaEpoch == 0 {
-		fork = "osaka/fulu"
-	}
+	fork := configuredFork(cfg)
 	return map[string]any{
 		"chainId": cfg.Chain.ChainID, "networkId": cfg.EffectiveNetworkID(),
 		"genesisTime": cfg.Chain.GenesisTime, "gasLimit": cfg.Chain.GasLimit, "fork": fork,
@@ -230,6 +229,16 @@ func networkDescription(cfg ethertest.Config) map[string]any {
 		"syntheticFinality": true, "consensusMode": "synthetic",
 		"beaconApi": "v4-subset", "fullConsensus": false, "releaseComplete": false,
 	}
+}
+
+func configuredFork(cfg ethertest.Config) string {
+	if cfg.Chain.Forks.OsakaEpoch == 0 {
+		return "fulu"
+	}
+	if cfg.Chain.Forks.PragueEpoch == 0 {
+		return "electra"
+	}
+	return "deneb"
 }
 
 func configuredEndpoints(cfg ethertest.Config) (string, string, string) {
@@ -374,6 +383,13 @@ func stateCommand() *cli.Command {
 			if err != nil {
 				return err
 			}
+			if cfg.Storage.Engine != "pebble" || cfg.Storage.Path == "" {
+				return cli.Exit("state dump requires a Pebble data directory (--data-dir or storage.path)", 2)
+			}
+			entries, err := os.ReadDir(cfg.Storage.Path)
+			if err != nil || len(entries) == 0 {
+				return cli.Exit("state dump requires an existing nonempty Pebble data directory", 2)
+			}
 			cfg.HTTP.Enabled, cfg.Beacon.Enabled = false, false
 			node, err := ethertest.New(cfg)
 			if err != nil {
@@ -414,13 +430,17 @@ func accountsCommand() *cli.Command {
 }
 
 func capabilitiesCommand() *cli.Command {
-	return &cli.Command{Name: "capabilities", Action: func(*cli.Context) error {
+	return &cli.Command{Name: "capabilities", Action: func(ctx *cli.Context) error {
+		cfg, err := effectiveConfig(ctx)
+		if err != nil {
+			return err
+		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{
-			"version": ethertest.Version, "status": "alpha", "fork": "osaka/fulu",
+			"version": ethertest.Version, "status": "alpha", "fork": configuredFork(cfg),
 			"syntheticFinality": true, "blobCodec": []string{"canonical-blob", "packed-bytes-v1"},
 			"consensusMode": "synthetic", "beaconApi": "v4-subset", "fullConsensus": false,
 			"forkTransitions": []string{"deneb", "electra", "fulu"},
-			"ipc":             true,
+			"ipc":             cfg.IPC.Enabled,
 			"releaseComplete": false,
 		})
 	}}

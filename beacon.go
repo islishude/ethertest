@@ -387,7 +387,11 @@ func (n *Node) beaconBlobs(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]deneb.Blob, 0)
 	for _, tx := range block.Transactions() {
-		sidecar := n.chain.blobSidecar(tx.Hash())
+		sidecar := n.chain.blobSidecarForVersion(tx.Hash(), types.BlobSidecarVersion0)
+		if sidecar == nil && len(tx.BlobHashes()) != 0 {
+			writeBeaconError(w, http.StatusInternalServerError, errors.New("stored blob bundle is missing or invalid"))
+			return
+		}
 		if sidecar == nil {
 			continue
 		}
@@ -442,7 +446,11 @@ func (n *Node) beaconBlobSidecars(w http.ResponseWriter, r *http.Request) {
 	items := make([]*deneb.BlobSidecar, 0)
 	globalIndex := uint64(0)
 	for _, tx := range block.Transactions() {
-		sidecar := n.chain.blobSidecar(tx.Hash())
+		sidecar := n.chain.blobSidecarForVersion(tx.Hash(), types.BlobSidecarVersion0)
+		if sidecar == nil && len(tx.BlobHashes()) != 0 {
+			writeBeaconError(w, http.StatusInternalServerError, errors.New("stored blob bundle is missing or invalid"))
+			return
+		}
 		if sidecar == nil {
 			continue
 		}
@@ -516,8 +524,12 @@ func (n *Node) beaconDataColumns(w http.ResponseWriter, r *http.Request) {
 	}
 	var blobs []storedBlob
 	for _, tx := range block.Transactions() {
-		sidecar := n.chain.blobSidecar(tx.Hash())
-		if sidecar == nil || sidecar.Version != types.BlobSidecarVersion1 {
+		sidecar := n.chain.blobSidecarForVersion(tx.Hash(), types.BlobSidecarVersion1)
+		if sidecar == nil && len(tx.BlobHashes()) != 0 {
+			writeBeaconError(w, http.StatusInternalServerError, errors.New("stored blob bundle is missing or invalid"))
+			return
+		}
+		if sidecar == nil {
 			continue
 		}
 		for index := range sidecar.Blobs {
@@ -723,6 +735,11 @@ func marshalDataColumnSSZ(
 }
 
 func (n *Node) beaconEvents(w http.ResponseWriter, r *http.Request) {
+	if err := n.reserveSubscription(); err != nil {
+		writeBeaconError(w, http.StatusTooManyRequests, err)
+		return
+	}
+	defer n.releaseSubscription()
 	topics, err := requestedBeaconTopics(r)
 	if err != nil {
 		writeBeaconError(w, http.StatusBadRequest, err)
@@ -779,6 +796,8 @@ func (n *Node) beaconEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-n.stopping:
 			return
 		case <-changed:
 			events, changed, err = n.events.sinceAndWait(revision)
@@ -926,18 +945,10 @@ func (n *Node) beaconBlockID(id string) (*types.Block, error) {
 				return block, nil
 			}
 			n.chain.mu.RLock()
-			hashes := make([]common.Hash, 0, len(n.chain.slotByHash))
-			for hash := range n.chain.slotByHash {
-				hashes = append(hashes, hash)
-			}
+			executionHash, exists := n.chain.beaconBlockByRoot[requested]
 			n.chain.mu.RUnlock()
-			for _, hash := range hashes {
-				block := n.chain.blockchain.GetBlockByHash(hash)
-				if block == nil {
-					continue
-				}
-				root, err := n.beaconRoot(block)
-				if err == nil && common.Hash(root) == requested {
+			if exists {
+				if block := n.chain.blockchain.GetBlockByHash(executionHash); block != nil {
 					return block, nil
 				}
 			}

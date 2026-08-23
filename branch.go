@@ -5,18 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 )
+
+const branchExtraPrefix = "ethertest-branch:"
 
 func (n *Node) CreateBranch(ctx context.Context, name string, blockNumber uint64) error {
 	if name == "" {
 		return errors.New("branch name is required")
 	}
-	_, err := n.execute(ctx, func(chain *executionChain) (any, error) {
+	if len(branchExtraPrefix)+len(name) > 32 {
+		return errors.New("branch name is too long")
+	}
+	_, err := n.executeWrite(ctx, func(chain *executionChain) (any, error) {
 		if _, exists := n.branches[name]; exists {
 			return nil, fmt.Errorf("branch %q already exists", name)
 		}
@@ -33,10 +38,15 @@ func (n *Node) CreateBranch(ctx context.Context, name string, blockNumber uint64
 		baseSafety := chain.blockSafety[base.Hash()]
 		chain.mu.RUnlock()
 		item := &branch{name: name, base: base.Hash(), head: base.Hash(), tainted: baseSafety.Tainted}
-		if err := persistBranch(chain.db, item); err != nil {
+		mutation, err := branchPut(item)
+		if err != nil {
 			return nil, err
 		}
-		n.branches[name] = item
+		if err := n.commitAuxiliary(chain, []journalKV{mutation}, nil, nil, func() {
+			n.branches[name] = item
+		}); err != nil {
+			return nil, err
+		}
 		n.logger.Info("branch created",
 			"event", "branch_created",
 			"name", name,
@@ -49,13 +59,22 @@ func (n *Node) CreateBranch(ctx context.Context, name string, blockNumber uint64
 }
 
 func (n *Node) MineBranch(ctx context.Context, name string, count uint64) ([]common.Hash, error) {
-	value, err := n.execute(ctx, func(chain *executionChain) (any, error) {
+	if count > n.cfg.Limits.MaxControlOperations {
+		return nil, newResourceLimitError("branch block count", count, n.cfg.Limits.MaxControlOperations)
+	}
+	if err := n.checkFixedListResponse("branch mine", count, 68); err != nil {
+		return nil, err
+	}
+	value, err := n.executeWrite(ctx, func(chain *executionChain) (any, error) {
 		item := n.branches[name]
 		if item == nil {
 			return nil, fmt.Errorf("branch %q not found", name)
 		}
 		hashes := make([]common.Hash, 0, count)
 		for range count {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			parent := chain.blockchain.GetBlockByHash(item.head)
 			if parent == nil {
 				return nil, errors.New("branch head not found")
@@ -64,22 +83,43 @@ func (n *Node) MineBranch(ctx context.Context, name string, count uint64) ([]com
 			if err != nil {
 				return nil, err
 			}
-			targetTime := parent.Time() + uint64(n.cfg.Chain.SlotDuration.Seconds())
-			var nativeRequests [][]byte
-			blocks, _ := core.GenerateChain(chain.config, parent, chain.blockchain.Engine(), chain.db, 1, func(_ int, gen *core.BlockGen) {
-				gen.OffsetTime(int64(targetTime) - int64(gen.Timestamp()))
-				gen.SetPoS()
-				gen.SetCoinbase(chain.feeRecipientAddress())
-				gen.SetParentBeaconRoot(common.Hash(projection.Root))
-				gen.SetExtra([]byte("ethertest-branch:" + name))
-				nativeRequests = cloneExecutionRequestBytes(gen.ConsensusLayerRequests())
-			})
-			block := blocks[0]
+			slotDuration := uint64(n.cfg.Chain.SlotDuration.Seconds())
+			if parent.Time() > math.MaxUint64-slotDuration {
+				return nil, errors.New("branch block timestamp overflows uint64")
+			}
+			targetTime := parent.Time() + slotDuration
+			candidate, initialState, err := newCandidateState(chain.db, parent.Root())
+			if err != nil {
+				return nil, err
+			}
+			block, receipts, postState, nativeRequests, err := chain.generateBlock(
+				ctx, parent, targetTime, common.Hash(projection.Root), nil, nil, false,
+				[]byte(branchExtraPrefix+name), initialState, nil,
+			)
+			if err != nil {
+				return nil, err
+			}
 			prepared, err := prepareExecutionRequestBlock(block, nativeRequests, newExecutionRequestQueue())
 			if err != nil {
 				return nil, err
 			}
 			block = prepared.Block
+			if err := chain.deriveReceiptFields(block, receipts); err != nil {
+				return nil, err
+			}
+			_, root, err := candidate.commit(
+				postState, block.NumberU64(), true, chain.config.IsCancun(block.Number(), block.Time()),
+			)
+			if err != nil {
+				return nil, err
+			}
+			if root != block.Root() {
+				return nil, fmt.Errorf("branch candidate state root %s does not match block %s", root, block.Root())
+			}
+			statePuts, err := candidate.puts()
+			if err != nil {
+				return nil, err
+			}
 			slot := uint64(0)
 			if block.Time() > chain.genesisTime {
 				slot = (block.Time() - chain.genesisTime) / chain.slotDuration
@@ -98,7 +138,6 @@ func (n *Node) MineBranch(ctx context.Context, name string, count uint64) ([]com
 			safety := blockSafetyForChild(parentSafety, block.Hash())
 			updated := &branch{
 				name: item.name, base: item.base, head: block.Hash(),
-				blocks:  append(append([]common.Hash(nil), item.blocks...), block.Hash()),
 				tainted: safety.Tainted,
 			}
 			branchMutation, err := branchPut(updated)
@@ -110,21 +149,27 @@ func (n *Node) MineBranch(ctx context.Context, name string, count uint64) ([]com
 				return nil, err
 			}
 			operation := preparedOperation{
-				Kind: "block", TargetBlock: block.Hash(),
+				Kind: "block", TargetBlock: block.Hash(), TargetNumber: block.NumberU64(),
 				Puts: []journalKV{
 					blockSlotPut(block.Hash(), slot), safetyMutation, projectionPut, requestRecordPut, branchMutation,
 				},
 			}
+			operation.ExecutionPuts, operation.RollbackDeletes, err = n.planExecutionPuts(chain, statePuts)
+			if err != nil {
+				return nil, err
+			}
 			if err := n.commitPrepared(chain, operation, nil, func() error {
-				_, insertErr := chain.blockchain.InsertBlockWithoutSetHead(ctx, block, false)
-				return insertErr
+				if err := writeJournalPuts(chain, operation.ExecutionPuts); err != nil {
+					return err
+				}
+				return persistBuiltBlock(chain, block, receipts)
 			}, func() {
 				chain.mu.Lock()
 				chain.slotByHash[block.Hash()] = slot
 				chain.blockSafety[block.Hash()] = safety
 				chain.mu.Unlock()
+				applyProjectionIndex(chain, block.Hash(), projectionPut)
 				item.head = updated.head
-				item.blocks = updated.blocks
 				item.tainted = updated.tainted
 			}); err != nil {
 				return nil, err
@@ -148,7 +193,7 @@ func (n *Node) MineBranch(ctx context.Context, name string, count uint64) ([]com
 }
 
 func (n *Node) SwitchBranch(ctx context.Context, name string) error {
-	_, err := n.execute(ctx, func(chain *executionChain) (any, error) {
+	_, err := n.executeWrite(ctx, func(chain *executionChain) (any, error) {
 		item := n.branches[name]
 		if item == nil {
 			return nil, fmt.Errorf("branch %q not found", name)
@@ -167,7 +212,7 @@ func (n *Node) SwitchBranch(ctx context.Context, name string) error {
 		if commonAncestor.NumberU64() < finalized.NumberU64() {
 			return nil, errors.New("branch switch would replace finalized history; use reset or restore")
 		}
-		if err := n.switchCanonical(chain, target, chain.slotOf(target)); err != nil {
+		if err := n.switchCanonical(ctx, chain, target, chain.slotOf(target)); err != nil {
 			return nil, err
 		}
 		n.logger.Info("branch switched",
@@ -181,7 +226,7 @@ func (n *Node) SwitchBranch(ctx context.Context, name string) error {
 	return err
 }
 
-func (n *Node) switchCanonical(chain *executionChain, target *types.Block, targetSlot uint64) error {
+func (n *Node) switchCanonical(ctx context.Context, chain *executionChain, target *types.Block, targetSlot uint64) error {
 	oldHead := chain.blockchain.GetBlockByHash(chain.blockchain.CurrentBlock().Hash())
 	if oldHead.Hash() == target.Hash() && chain.currentSlot() == targetSlot {
 		return nil
@@ -268,8 +313,8 @@ func (n *Node) switchCanonical(chain *executionChain, target *types.Block, targe
 	}); err != nil {
 		return err
 	}
-	if err := n.rebuildPendingView(chain); err != nil {
-		n.writeErr = err
+	if err := n.rebuildPendingView(ctx, chain); err != nil {
+		n.disableWrites(err)
 		return fmt.Errorf("canonical switch committed but pending view rebuild failed: %w", err)
 	}
 	n.logger.Info("canonical chain reorganized",

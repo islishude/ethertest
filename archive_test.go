@@ -29,6 +29,9 @@ func TestStateArchiveRoundTripAndCorruption(t *testing.T) {
 		t.Fatalf("unexpected manifest %#v", manifest)
 	}
 	destination := filepath.Join(t.TempDir(), "pebble")
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := LoadState(path, destination); err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +62,32 @@ func TestStateArchiveRoundTripAndCorruption(t *testing.T) {
 	}
 }
 
+func TestInspectStateValidatesManifestAgainstStreamedDatabase(t *testing.T) {
+	node, err := New(testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := encodeDatabase(node.chain.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	genesis := node.chain.blockchain.Genesis()
+	if err := node.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "wrong-head.tar.zst")
+	manifest := StateManifest{
+		Format: StateArchiveFormat, ConsensusMode: "synthetic", ChainID: DefaultChainID,
+		GenesisHash: genesis.Hash().Hex(), HeadHash: "0x0000000000000000000000000000000000000000000000000000000000000001",
+	}
+	if err := writeArchiveAtomic(path, manifest, database); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InspectState(path); err == nil {
+		t.Fatal("semantic manifest mismatch was accepted")
+	}
+}
+
 func TestCloseDumpsStateAfterStoppingWrites(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "shutdown.tar.zst")
 	cfg := testConfig()
@@ -79,5 +108,33 @@ func TestCloseDumpsStateAfterStoppingWrites(t *testing.T) {
 	}
 	if manifest.HeadNumber != 0 || manifest.GenesisHash != manifest.HeadHash {
 		t.Fatalf("unexpected shutdown manifest %#v", manifest)
+	}
+}
+
+func TestArchiveV1IsRejectedAndFailedLoadLeavesDestinationUntouched(t *testing.T) {
+	node, err := New(testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := encodeDatabase(node.chain.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "v1.tar.zst")
+	if err := writeArchiveAtomic(path, StateManifest{Format: "ethertest-state-v1", ConsensusMode: "synthetic"}, database); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InspectState(path); err == nil {
+		t.Fatal("v1 archive was accepted")
+	}
+	destination := filepath.Join(t.TempDir(), "destination")
+	if err := LoadState(path, destination); err == nil {
+		t.Fatal("v1 archive load was accepted")
+	}
+	if _, err := os.Stat(destination); !os.IsNotExist(err) {
+		t.Fatalf("failed load changed destination: %v", err)
 	}
 }

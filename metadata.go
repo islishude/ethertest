@@ -21,11 +21,10 @@ type storedChainPoint struct {
 }
 
 type storedBranch struct {
-	Name    string        `json:"name"`
-	Base    common.Hash   `json:"base"`
-	Head    common.Hash   `json:"head"`
-	Blocks  []common.Hash `json:"blocks"`
-	Tainted bool          `json:"tainted"`
+	Name    string      `json:"name"`
+	Base    common.Hash `json:"base"`
+	Head    common.Hash `json:"head"`
+	Tainted bool        `json:"tainted"`
 }
 
 func loadControlMetadata(db ethdb.Database) (map[string]*chainPoint, map[string]*branch, error) {
@@ -67,7 +66,7 @@ func loadControlMetadata(db ethdb.Database) (map[string]*chainPoint, map[string]
 		}
 		branches[name] = &branch{
 			name: stored.Name, base: stored.Base, head: stored.Head,
-			blocks: append([]common.Hash(nil), stored.Blocks...), tainted: stored.Tainted,
+			tainted: stored.Tainted,
 		}
 	}
 	if err := iterator.Error(); err != nil {
@@ -110,33 +109,17 @@ func validateControlMetadata(chain *executionChain, checkpoints map[string]*chai
 		if head == nil {
 			return fmt.Errorf("branch %q references missing head block %s", name, item.head)
 		}
-		if len(item.blocks) == 0 {
-			if item.head != item.base {
-				return fmt.Errorf("branch %q has no blocks but its head differs from its base", name)
+		block := head
+		for block.Hash() != base.Hash() {
+			if block.NumberU64() == 0 || block.NumberU64() <= base.NumberU64() {
+				return fmt.Errorf("branch %q head does not descend from its base", name)
 			}
-		} else if item.blocks[len(item.blocks)-1] != item.head {
-			return fmt.Errorf("branch %q head does not match its final block", name)
-		}
-		parent := base
-		parentSlot := chain.slotByHash[parent.Hash()]
-		seen := make(map[common.Hash]struct{}, len(item.blocks))
-		for index, hash := range item.blocks {
-			if _, duplicate := seen[hash]; duplicate {
-				return fmt.Errorf("branch %q repeats block %s", name, hash)
+			blockSlot, blockExists := chain.slotByHash[block.Hash()]
+			parent := chain.blockchain.GetBlock(block.ParentHash(), block.NumberU64()-1)
+			if !blockExists || parent == nil || blockSlot <= chain.slotByHash[parent.Hash()] {
+				return fmt.Errorf("branch %q has inconsistent lineage metadata", name)
 			}
-			seen[hash] = struct{}{}
-			block := chain.blockchain.GetBlockByHash(hash)
-			if block == nil {
-				return fmt.Errorf("branch %q references missing block %s", name, hash)
-			}
-			if block.ParentHash() != parent.Hash() || block.NumberU64() != parent.NumberU64()+1 {
-				return fmt.Errorf("branch %q block %d does not extend its recorded parent", name, index)
-			}
-			slot, exists := chain.slotByHash[hash]
-			if !exists || slot <= parentSlot {
-				return fmt.Errorf("branch %q block %s has inconsistent slot metadata", name, hash)
-			}
-			parent, parentSlot = block, slot
+			block = parent
 		}
 		safety, exists := chain.blockSafety[item.head]
 		if !exists || safety.Tainted != item.tainted {
@@ -146,25 +129,14 @@ func validateControlMetadata(chain *executionChain, checkpoints map[string]*chai
 	return nil
 }
 
-func persistCheckpoint(db ethdb.Database, name string, point *chainPoint) error {
+func checkpointPut(name string, point *chainPoint) (journalKV, error) {
 	encoded, err := json.Marshal(storedChainPoint{
 		Hash: point.hash, Number: point.number, Slot: point.slot, Tainted: point.tainted,
 	})
 	if err != nil {
-		return err
+		return journalKV{}, err
 	}
-	return db.Put(appendKey(checkpointNamespace, name), encoded)
-}
-
-func persistBranch(db ethdb.Database, item *branch) error {
-	encoded, err := json.Marshal(storedBranch{
-		Name: item.name, Base: item.base, Head: item.head,
-		Blocks: item.blocks, Tainted: item.tainted,
-	})
-	if err != nil {
-		return err
-	}
-	return db.Put(appendKey(branchNamespace, item.name), encoded)
+	return journalKV{Key: appendKey(checkpointNamespace, name), Value: encoded}, nil
 }
 
 func appendKey(prefix []byte, suffix string) []byte {

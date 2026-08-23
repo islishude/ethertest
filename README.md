@@ -7,9 +7,9 @@ explorers, indexers, and other off-chain applications that need realistic
 cross-layer behavior without P2P or a validator client.
 
 The current version is `0.1.0-alpha.1`. State format compatibility is not
-promised until `v0.1.0`. This alpha uses an in-place, breaking state layout:
-databases created by the earlier layout are rejected and must be recreated;
-there is no migration command.
+promised until `v0.1.0`. This tree uses metadata schema v2 and
+`ethertest-state-v2` archives. Schema-v1 databases and v1 archives are rejected
+with an explicit rebuild error; there is no migration command.
 An unspecified `genesis_time` (`0`) is resolved once for a new generated chain
 and then read from the persisted timeline on later Pebble starts. An explicitly
 supplied value that differs from the stored value is rejected.
@@ -97,7 +97,8 @@ The network surface currently includes:
 - `Node.PauseFinality`, `Node.ResumeFinality`, `Node.FinalityStatus`, and matching
   `ethertest_*` RPC controls for persistent synthetic finality fixtures.
 - Memory and Pebble databases; recovery-journaled execution/auxiliary commits;
-  checksum-verified, zstd-compressed state archives.
+  streaming, checksum-verified, zstd-compressed state archives with atomic
+  staging for both dump and load.
 - `Node.SafetyStatus`, `Node.BlockSafety`, `ethertest_safetyStatus`, and
   `ethertest_blockSafety` for permanent fixture taint discovery.
 - Offline locked EIP-4788 wraparound, KZG proof, and SSZ container regression
@@ -275,6 +276,11 @@ ethertest capabilities
 ethertest completion bash|zsh|fish
 ```
 
+`ethertest state dump` requires an effective Pebble `storage.path` (or
+`--data-dir`); it never silently creates and exports a fresh in-memory chain.
+`state load` verifies and stages the complete v2 archive before replacing an
+empty destination.
+
 Configuration precedence is defaults, strict TOML, `ETHERTEST_*`, then CLI.
 Unknown TOML keys and conflicting settings are rejected. Non-loopback listeners
 require explicit `--allow-unsafe-external`. TLS only uses user-provided
@@ -321,7 +327,19 @@ simple name is placed under `storage.path` for Pebble nodes or the system
 temporary directory for in-memory nodes, while a path containing a directory
 is used exactly as supplied. Windows maps the configured name to a named pipe.
 Unix sockets are created with mode `0600`. `ethertest network --json` reports
-the resolved endpoint in its `ipc` field.
+the resolved endpoint in its `ipc` field. Startup removes only an unreachable
+stale Unix socket; regular files, symlinks, and live sockets are never replaced.
+
+### Resource limits
+
+`[limits]` bounds transport bytes and expensive local-node work. Defaults are
+16 MiB requests, 64 MiB responses, 1,000 batch items, 256 control operations,
+10,000 log blocks/results, 50,000,000 RPC gas, a 5-second trace timeout, 1,024
+polling filters, 1,024 active subscriptions, and a 5-minute filter lifetime.
+Every field has a matching `ETHERTEST_*` variable; over-limit RPC work returns
+`-38026` and execution timeout returns `-32016`. HTTP, WebSocket, and IPC all
+apply the configured byte bounds. Embedded Go callers can classify the same
+limit failures with `errors.Is(err, ethertest.ErrResourceLimit)`.
 
 An IPC-only CLI node can be started with:
 
@@ -370,6 +388,9 @@ if err != nil { /* handle */ }
 if err := node.Start(); err != nil { /* handle */ }
 defer node.Close()
 
+// Optional: wait for listener/controller failure or host cancellation.
+err = node.Wait(ctx)
+
 client := node.RPCClient()
 defer client.Close()
 ```
@@ -390,19 +411,19 @@ removed, err := node.RemoveAccount(ctx, result.Address)
 
 `result.ControlBlockHash` is nil when no balance was requested.
 
-All public writes pass through one controller. Queries use geth's immutable
-committed headers/state roots and may run concurrently. Persistent namespaces
-share one database, but the current alpha does not yet provide a crash-atomic
-transaction spanning geth's block writes and every auxiliary namespace.
+All public writes pass through one controller and a common write-disabled gate.
+Pending blocks are assembled once against a read-through in-memory state layer;
+only canonical/branch/control commits reach the authoritative database. Queries
+use immutable committed headers/state roots and may run concurrently.
 
 ## Development
 
-Use the Go version declared in `go.mod`.
+Use Go 1.27.0 as declared in `go.mod` and used by CI and Docker.
 
-Install the latest golangci-lint before running the lint target:
+Install the CI-pinned golangci-lint version before running the lint target:
 
 ```sh
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
 ```
 
 ```sh

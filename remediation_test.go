@@ -1,7 +1,9 @@
 package ethertest
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"math/big"
@@ -22,6 +24,15 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 )
+
+type failingPendingProjectionDatabase struct{ ethdb.Database }
+
+func (db failingPendingProjectionDatabase) Get(key []byte) ([]byte, error) {
+	if bytes.HasPrefix(key, projectionPrefix) {
+		return nil, errors.New("injected pending projection failure")
+	}
+	return db.Database.Get(key)
+}
 
 func signedDynamicTransaction(t *testing.T, cfg Config, account Account, nonce uint64, to common.Address, value *big.Int, data []byte) *types.Transaction {
 	t.Helper()
@@ -507,6 +518,31 @@ func TestOldInPlaceStateWithoutMetadataIsRejected(t *testing.T) {
 	}
 }
 
+func TestMetadataSchemaV1RequiresRebuild(t *testing.T) {
+	cfg := testConfig()
+	cfg.Storage.Engine = "pebble"
+	cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db := openTestPebbleDatabase(t, cfg.Storage.Path)
+	var version [8]byte
+	binary.BigEndian.PutUint64(version[:], 1)
+	if err := db.Put(stateSchemaKey, version[:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "recreate the database for schema v2") {
+		t.Fatalf("schema v1 error = %v", err)
+	}
+}
+
 func TestPersistedMetadataCorruptionFailsClosed(t *testing.T) {
 	t.Run("projection", func(t *testing.T) {
 		cfg := testConfig()
@@ -534,7 +570,7 @@ func TestPersistedMetadataCorruptionFailsClosed(t *testing.T) {
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "missing or inconsistent Beacon projection") {
+		if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "has no Beacon projection") {
 			t.Fatalf("projection corruption error = %v", err)
 		}
 	})
@@ -602,8 +638,7 @@ func TestPersistedMetadataCorruptionFailsClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 		encoded, err := json.Marshal(storedBranch{
-			Name: item.name, Base: item.base, Head: item.base,
-			Blocks: item.blocks, Tainted: item.tainted,
+			Name: item.name, Base: item.base, Head: common.HexToHash("0xdead"), Tainted: item.tainted,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -615,7 +650,7 @@ func TestPersistedMetadataCorruptionFailsClosed(t *testing.T) {
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "branch \"alternate\" head does not match its final block") {
+		if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "references missing head block") {
 			t.Fatalf("branch corruption error = %v", err)
 		}
 	})
@@ -684,6 +719,115 @@ func TestPendingCumulativeBalanceAndInvalidFrontierIsolation(t *testing.T) {
 	}
 	if pending, queued = (&txpoolAPI{node: node}).poolCounts(); pending != 1 || queued != 0 {
 		t.Fatalf("classification after funded reorg = %d/%d, want 1/0", pending, queued)
+	}
+}
+
+func TestPendingAndControlVerificationDoNotWriteAuthoritativeDatabase(t *testing.T) {
+	cfg := testConfig()
+	cfg.Mining.Mode = miningModeManual
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+	countEntries := func() int {
+		iterator := node.chain.db.NewIterator(nil, nil)
+		defer iterator.Release()
+		count := 0
+		for iterator.Next() {
+			count++
+		}
+		if err := iterator.Error(); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	before := countEntries()
+	transaction := signedDynamicTransaction(
+		t, cfg, testWalletAccount(t, node, 0), 0, node.Accounts()[1], big.NewInt(1), nil,
+	)
+	if _, err := node.SendTransaction(context.Background(), transaction); err != nil {
+		t.Fatal(err)
+	}
+	if after := countEntries(); after != before {
+		t.Fatalf("pending transaction changed database entries: before=%d after=%d", before, after)
+	}
+	if _, err := node.Mine(context.Background(), 1, false); err != nil {
+		t.Fatal(err)
+	}
+	balance := big.NewInt(123)
+	controlHash, err := node.ApplyControl(context.Background(), ControlChanges{
+		node.Accounts()[2]: {Balance: balance},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeVerify := countEntries()
+	if valid, err := node.VerifyControlRecord(context.Background(), controlHash); err != nil || !valid {
+		t.Fatalf("control verification = %v, %v", valid, err)
+	}
+	if after := countEntries(); after != beforeVerify {
+		t.Fatalf("control verification changed database entries: before=%d after=%d", beforeVerify, after)
+	}
+}
+
+func TestTransactionProposalRollsBackWhenPendingRebuildFails(t *testing.T) {
+	cfg := testConfig()
+	cfg.Mining.Mode = miningModeManual
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+	transaction := signedDynamicTransaction(
+		t, cfg, testWalletAccount(t, node, 0), 0, node.Accounts()[1], big.NewInt(1), nil,
+	)
+	original := node.chain.db
+	node.chain.db = failingPendingProjectionDatabase{Database: original}
+	if _, err := node.SendTransaction(context.Background(), transaction); err == nil ||
+		!strings.Contains(err.Error(), "injected pending projection failure") {
+		t.Fatalf("pending rebuild failure = %v", err)
+	}
+	node.chain.db = original
+	if node.chain.pendingCount() != 0 || node.chain.poolTransaction(transaction.Hash()) != nil {
+		t.Fatal("failed transaction proposal remained in the pool")
+	}
+	if pending := node.chain.pendingBlock(); pending == nil || len(pending.Transactions()) != 0 {
+		t.Fatalf("failed transaction changed pending block: %#v", pending)
+	}
+}
+
+func TestAutomaticMiningFailureDoesNotPublishPendingTransaction(t *testing.T) {
+	cfg := testConfig()
+	cfg.Mining.Mode = "transaction"
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+	transaction := signedDynamicTransaction(
+		t, cfg, testWalletAccount(t, node, 0), 0, node.Accounts()[1], big.NewInt(1), nil,
+	)
+	node.commitHook = func(stage commitStage) error {
+		if stage == commitStagePrepared {
+			return errors.New("injected automatic mining failure")
+		}
+		return nil
+	}
+	if _, err := node.SendTransaction(t.Context(), transaction); err == nil {
+		t.Fatal("automatic mining failure was not returned")
+	}
+	if node.pendingEvents.current() != 0 || node.chain.pendingCount() != 0 || node.chain.poolTransaction(transaction.Hash()) != nil {
+		t.Fatal("failed automatic transaction left a notification or pool proposal")
 	}
 }
 

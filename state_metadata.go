@@ -12,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
-const currentMetadataFormat = 1
+const currentMetadataFormat = 2
 
 var (
 	stateSchemaKey      = []byte("ethertest/meta/schema-version")
@@ -81,6 +81,8 @@ type preparedOperation struct {
 	TargetBlock           common.Hash `json:"target_block,omitempty"`
 	TargetNumber          uint64      `json:"target_number,omitempty"`
 	DiscardTargetOnCancel bool        `json:"discard_target_on_cancel,omitempty"`
+	ExecutionPuts         []journalKV `json:"execution_puts,omitempty"`
+	RollbackDeletes       [][]byte    `json:"rollback_deletes,omitempty"`
 	Puts                  []journalKV `json:"puts,omitempty"`
 	Deletes               [][]byte    `json:"deletes,omitempty"`
 }
@@ -112,9 +114,11 @@ func recoverPreparedOperation(db ethdb.Database, currentHead func() common.Hash,
 			return finalizePreparedOperation(db, operation)
 		case operation.OldHead:
 			if operation.DiscardTargetOnCancel {
-				discardPreparedTarget(db, operation.NewHead, operation.TargetNumber)
+				if err := discardPreparedTarget(db, operation.NewHead, operation.TargetNumber); err != nil {
+					return err
+				}
 			}
-			return db.Delete(journalKey)
+			return cancelPreparedOperation(db, operation)
 		default:
 			return fmt.Errorf("recovery journal head mismatch: have %s, old %s, target %s", head, operation.OldHead, operation.NewHead)
 		}
@@ -122,25 +126,33 @@ func recoverPreparedOperation(db ethdb.Database, currentHead func() common.Hash,
 		if blockExists(operation.TargetBlock) {
 			return finalizePreparedOperation(db, operation)
 		}
-		return db.Delete(journalKey)
+		if operation.TargetBlock != (common.Hash{}) {
+			if err := discardPreparedTarget(db, operation.TargetBlock, operation.TargetNumber); err != nil {
+				return err
+			}
+		}
+		return cancelPreparedOperation(db, operation)
 	default:
 		return fmt.Errorf("unsupported recovery journal kind %q", operation.Kind)
 	}
 }
 
-func discardPreparedTarget(db ethdb.Database, hash common.Hash, number uint64) {
+func discardPreparedTarget(db ethdb.Database, hash common.Hash, number uint64) error {
+	batch := db.NewBatch()
+	defer batch.Close()
 	if block := rawdb.ReadBlock(db, hash, number); block != nil {
 		for _, transaction := range block.Transactions() {
 			indexedNumber := rawdb.ReadTxLookupEntry(db, transaction.Hash())
 			if indexedNumber != nil && *indexedNumber == number {
-				rawdb.DeleteTxLookupEntry(db, transaction.Hash())
+				rawdb.DeleteTxLookupEntry(batch, transaction.Hash())
 			}
 		}
 	}
 	if rawdb.ReadCanonicalHash(db, number) == hash {
-		rawdb.DeleteCanonicalHash(db, number)
+		rawdb.DeleteCanonicalHash(batch, number)
 	}
-	rawdb.DeleteBlock(db, hash, number)
+	rawdb.DeleteBlock(batch, hash, number)
+	return batch.Write()
 }
 
 func writePreparedOperation(db ethdb.Database, operation preparedOperation) error {
@@ -154,12 +166,30 @@ func writePreparedOperation(db ethdb.Database, operation preparedOperation) erro
 
 func finalizePreparedOperation(db ethdb.Database, operation preparedOperation) error {
 	batch := db.NewBatch()
+	for _, item := range operation.ExecutionPuts {
+		if err := batch.Put(item.Key, item.Value); err != nil {
+			return err
+		}
+	}
 	for _, item := range operation.Puts {
 		if err := batch.Put(item.Key, item.Value); err != nil {
 			return err
 		}
 	}
 	for _, key := range operation.Deletes {
+		if err := batch.Delete(key); err != nil {
+			return err
+		}
+	}
+	if err := batch.Delete(journalKey); err != nil {
+		return err
+	}
+	return batch.Write()
+}
+
+func cancelPreparedOperation(db ethdb.Database, operation preparedOperation) error {
+	batch := db.NewBatch()
+	for _, key := range operation.RollbackDeletes {
 		if err := batch.Delete(key); err != nil {
 			return err
 		}
@@ -188,7 +218,7 @@ func initializeRuntimeMetadata(chain *executionChain, existingData bool) error {
 			return err
 		}
 		if len(version) != 8 || binary.BigEndian.Uint64(version) != currentMetadataFormat {
-			return errors.New("unsupported ethertest state metadata schema")
+			return fmt.Errorf("unsupported ethertest state metadata schema; recreate the database for schema v%d", currentMetadataFormat)
 		}
 		return loadRuntimeMetadata(chain)
 	}
@@ -211,7 +241,7 @@ func readPersistedGenesisMetadata(db ethdb.Database) (storedTimeline, error) {
 		return storedTimeline{}, err
 	}
 	if len(version) != 8 || binary.BigEndian.Uint64(version) != currentMetadataFormat {
-		return storedTimeline{}, errors.New("unsupported ethertest state metadata schema")
+		return storedTimeline{}, fmt.Errorf("unsupported ethertest state metadata schema; recreate the database for schema v%d", currentMetadataFormat)
 	}
 	encoded, err := db.Get(timelineKey)
 	if err != nil {
@@ -392,8 +422,11 @@ func validateRuntimeMetadata(chain *executionChain) error {
 		if err != nil {
 			return err
 		}
-		if !projected || projection.Slot != slot {
-			return fmt.Errorf("execution block %s has missing or inconsistent Beacon projection", hash)
+		if !projected {
+			return fmt.Errorf("execution block %s has no Beacon projection", hash)
+		}
+		if projection.Slot != slot {
+			return fmt.Errorf("execution block %s has inconsistent Beacon projection slot", hash)
 		}
 		safety, safe := chain.blockSafety[hash]
 		if !safe || safety.BlockHash != hash {

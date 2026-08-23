@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"math"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -34,8 +34,14 @@ func (n *Node) ApplyControl(ctx context.Context, changes ControlChanges) (common
 	if len(changes) == 0 {
 		return common.Hash{}, errors.New("control changes are empty")
 	}
-	value, err := n.execute(ctx, func(chain *executionChain) (any, error) {
-		return n.applyControl(chain, changes)
+	if uint64(len(changes)) > n.cfg.Limits.MaxControlOperations {
+		return common.Hash{}, newResourceLimitError(
+			"control account count", uint64(len(changes)), n.cfg.Limits.MaxControlOperations,
+		)
+	}
+	changes = cloneControlChanges(changes)
+	value, err := n.executeWrite(ctx, func(chain *executionChain) (any, error) {
+		return n.applyControl(ctx, chain, changes)
 	})
 	if err != nil {
 		return common.Hash{}, err
@@ -43,7 +49,37 @@ func (n *Node) ApplyControl(ctx context.Context, changes ControlChanges) (common
 	return value.(common.Hash), nil
 }
 
-func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (common.Hash, error) {
+func cloneControlChanges(changes ControlChanges) ControlChanges {
+	cloned := make(ControlChanges, len(changes))
+	for address, change := range changes {
+		copy := AccountChanges{}
+		if change.Balance != nil {
+			copy.Balance = new(big.Int).Set(change.Balance)
+		}
+		if change.Nonce != nil {
+			value := *change.Nonce
+			copy.Nonce = &value
+		}
+		if change.Code != nil {
+			value := append([]byte(nil), (*change.Code)...)
+			copy.Code = &value
+		}
+		if change.Storage != nil {
+			value := make(map[common.Hash]common.Hash, len(*change.Storage))
+			maps.Copy(value, *change.Storage)
+			copy.Storage = &value
+		}
+		if change.StorageDiff != nil {
+			value := make(map[common.Hash]common.Hash, len(*change.StorageDiff))
+			maps.Copy(value, *change.StorageDiff)
+			copy.StorageDiff = &value
+		}
+		cloned[address] = copy
+	}
+	return cloned
+}
+
+func (n *Node) applyControl(ctx context.Context, chain *executionChain, changes ControlChanges) (common.Hash, error) {
 	parentHeader := chain.blockchain.CurrentBlock()
 	parent := chain.blockchain.GetBlock(parentHeader.Hash(), parentHeader.Number.Uint64())
 	projection, err := n.consensus.ensureProjection(chain, parent)
@@ -51,40 +87,37 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 		return common.Hash{}, err
 	}
 	chain.mu.RLock()
+	if chain.slot == math.MaxUint64 {
+		chain.mu.RUnlock()
+		return common.Hash{}, errors.New("control block slot overflows uint64")
+	}
 	targetSlot := chain.slot + 1
 	parentSafety := chain.blockSafety[parent.Hash()]
 	timeline := chain.timeline()
 	sessionSafety := chain.sessionSafety()
 	chain.mu.RUnlock()
+	if targetSlot > (math.MaxUint64-chain.genesisTime)/chain.slotDuration {
+		return common.Hash{}, errors.New("control block timestamp overflows uint64")
+	}
 	targetTime := chain.genesisTime + targetSlot*chain.slotDuration
 	withdrawals, err := assignedWithdrawals(chain.blockchain, parent, n.pendingWithdrawals)
 	if err != nil {
 		return common.Hash{}, err
 	}
-	var nativeRequests [][]byte
-	blocks, receiptSets := core.GenerateChain(chain.config, parent, chain.blockchain.Engine(), chain.db, 1, func(_ int, generator *core.BlockGen) {
-		generator.OffsetTime(int64(targetTime) - int64(generator.Timestamp()))
-		generator.SetPoS()
-		generator.SetCoinbase(chain.feeRecipientAddress())
-		generator.SetParentBeaconRoot(common.Hash(projection.Root))
-		addWithdrawals(generator, withdrawals)
-		nativeRequests = cloneExecutionRequestBytes(generator.ConsensusLayerRequests())
-	})
-	generated := replaceGeneratedWithdrawals(blocks[0], receiptSets[0], withdrawals)
-	state, err := chain.blockchain.StateAt(generated.Header())
+	candidate, initialState, err := newCandidateState(chain.db, parent.Root())
+	if err != nil {
+		return common.Hash{}, err
+	}
+	generated, receipts, state, nativeRequests, err := chain.generateBlock(
+		ctx, parent, targetTime, common.Hash(projection.Root), nil, withdrawals, false, nil, initialState, nil,
+	)
 	if err != nil {
 		return common.Hash{}, err
 	}
 	if err := applyAccountChanges(state, changes); err != nil {
 		return common.Hash{}, err
 	}
-	root, err := state.Commit(generated.NumberU64(), true, true)
-	if err != nil {
-		return common.Hash{}, err
-	}
-	if err := state.Database().TrieDB().Commit(root, false); err != nil {
-		return common.Hash{}, err
-	}
+	root := state.IntermediateRoot(true)
 	metadata, err := json.Marshal(changes)
 	if err != nil {
 		return common.Hash{}, err
@@ -99,6 +132,9 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 		return common.Hash{}, err
 	}
 	block = prepared.Block
+	if err := chain.deriveReceiptFields(block, receipts); err != nil {
+		return common.Hash{}, err
+	}
 	controlRecord, err := rlp.EncodeToBytes([][]byte{metadata, parent.Hash().Bytes()})
 	if err != nil {
 		return common.Hash{}, err
@@ -139,6 +175,21 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 			canonicalSlotPut(targetSlot, block.Hash()), safetyMutation, sessionMutation, projectionPut, requestRecordPut,
 		},
 	}
+	_, committedRoot, err := candidate.commit(state, block.NumberU64(), true, true)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	if committedRoot != block.Root() {
+		return common.Hash{}, fmt.Errorf("control state root %s does not match block %s", committedRoot, block.Root())
+	}
+	statePuts, err := candidate.puts()
+	if err != nil {
+		return common.Hash{}, err
+	}
+	operation.ExecutionPuts, operation.RollbackDeletes, err = n.planExecutionPuts(chain, statePuts)
+	if err != nil {
+		return common.Hash{}, err
+	}
 	if prepared.Controlled {
 		queueMutation, err := executionRequestQueuePut(prepared.Remaining)
 		if err != nil {
@@ -151,8 +202,12 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 		events = append(events, *finalized)
 	}
 	if err := n.commitPrepared(chain, operation, events, func() error {
-		rawdb.WriteBlock(chain.db, block)
-		rawdb.WriteReceipts(chain.db, block.Hash(), block.NumberU64(), receiptSets[0])
+		if err := writeJournalPuts(chain, operation.ExecutionPuts); err != nil {
+			return err
+		}
+		if err := persistBuiltBlock(chain, block, receipts); err != nil {
+			return err
+		}
 		_, setErr := chain.blockchain.SetCanonical(block)
 		return setErr
 	}, func() {
@@ -167,13 +222,14 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 			chain.taintReasons[reason] = struct{}{}
 		}
 		chain.mu.Unlock()
+		applyProjectionIndex(chain, block.Hash(), projectionPut)
 		n.pendingExecutionRequests = prepared.Remaining
 	}); err != nil {
 		return common.Hash{}, err
 	}
 	n.pendingWithdrawals = nil
-	if err := n.rebuildPendingView(chain); err != nil {
-		n.writeErr = err
+	if err := n.rebuildPendingView(ctx, chain); err != nil {
+		n.disableWrites(err)
 		return common.Hash{}, fmt.Errorf("control block committed but pending view rebuild failed: %w", err)
 	}
 	n.logger.Info("control block applied",
@@ -189,6 +245,9 @@ func (n *Node) applyControl(chain *executionChain, changes ControlChanges) (comm
 func applyAccountChanges(state *state.StateDB, changes ControlChanges) error {
 	for address, change := range changes {
 		if change.Balance != nil {
+			if change.Balance.Sign() < 0 {
+				return errors.New("control balance cannot be negative")
+			}
 			balance, overflow := uint256.FromBig(change.Balance)
 			if overflow {
 				return errors.New("control balance exceeds uint256")
@@ -266,14 +325,14 @@ func (n *Node) VerifyControlRecord(ctx context.Context, hash common.Hash) (bool,
 		if err != nil {
 			return false, err
 		}
-		generated, _ := core.GenerateChain(chain.config, parent, chain.blockchain.Engine(), chain.db, 1, func(_ int, generator *core.BlockGen) {
-			generator.OffsetTime(int64(block.Time()) - int64(generator.Timestamp()))
-			generator.SetPoS()
-			generator.SetCoinbase(block.Coinbase())
-			generator.SetParentBeaconRoot(common.Hash(projection.Root))
-			addWithdrawals(generator, block.Withdrawals())
-		})
-		state, err := chain.blockchain.StateAt(generated[0].Header())
+		coinbase := block.Coinbase()
+		_, initialState, err := newCandidateState(chain.db, parent.Root())
+		if err != nil {
+			return false, err
+		}
+		_, _, state, _, err := chain.generateBlock(
+			ctx, parent, block.Time(), common.Hash(projection.Root), nil, block.Withdrawals(), false, nil, initialState, &coinbase,
+		)
 		if err != nil {
 			return false, err
 		}

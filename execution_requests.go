@@ -15,6 +15,7 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 )
@@ -618,12 +619,12 @@ func (n *Node) AddConsolidationRequest(ctx context.Context, request ExecutionCon
 }
 
 func (n *Node) addExecutionRequest(ctx context.Context, requestType byte, data []byte) error {
-	_, err := n.execute(ctx, func(chain *executionChain) (any, error) {
+	_, err := n.executeWrite(ctx, func(chain *executionChain) (any, error) {
 		proposed, err := n.pendingExecutionRequests.enqueue(requestType, data)
 		if err != nil {
 			return nil, err
 		}
-		candidate, err := n.pendingCandidate(chain, proposed)
+		candidate, err := n.pendingCandidate(ctx, chain, proposed)
 		if err != nil {
 			return nil, err
 		}
@@ -633,7 +634,7 @@ func (n *Node) addExecutionRequest(ctx context.Context, requestType byte, data [
 		}
 		if err := n.commitAuxiliary(chain, []journalKV{queueMutation}, nil, nil, func() {
 			n.pendingExecutionRequests = proposed
-			chain.setPendingView(candidate.block, candidate.state, candidate.receipts)
+			chain.setPendingView(candidate)
 		}); err != nil {
 			return nil, err
 		}
@@ -642,15 +643,31 @@ func (n *Node) addExecutionRequest(ctx context.Context, requestType byte, data [
 	return err
 }
 
-func (n *Node) pendingCandidate(chain *executionChain, queue executionRequestQueue) (*pendingView, error) {
+func (n *Node) pendingCandidate(ctx context.Context, chain *executionChain, queue executionRequestQueue) (*pendingView, error) {
+	chain.mu.RLock()
+	targetSlot := chain.slot + 1
+	chain.mu.RUnlock()
+	if targetSlot == 0 {
+		return nil, errors.New("pending block slot overflows uint64")
+	}
+	return n.pendingCandidateAtSlot(ctx, chain, queue, targetSlot)
+}
+
+func (n *Node) pendingCandidateAtSlot(
+	ctx context.Context,
+	chain *executionChain,
+	queue executionRequestQueue,
+	targetSlot uint64,
+) (*pendingView, error) {
 	parentHeader := chain.blockchain.CurrentBlock()
 	parent := chain.blockchain.GetBlock(parentHeader.Hash(), parentHeader.Number.Uint64())
 	projection, err := n.consensus.ensureProjection(chain, parent)
 	if err != nil {
 		return nil, err
 	}
-	block, receipts, _, native, err := chain.buildBlock(
-		uint64(n.cfg.Chain.SlotDuration/time.Second), false, common.Hash(projection.Root), n.pendingWithdrawals,
+	block, receipts, statedb, candidate, _, native, err := chain.buildBlockAtSlot(
+		ctx,
+		uint64(n.cfg.Chain.SlotDuration/time.Second), false, common.Hash(projection.Root), n.pendingWithdrawals, targetSlot,
 	)
 	if err != nil {
 		return nil, err
@@ -659,11 +676,42 @@ func (n *Node) pendingCandidate(chain *executionChain, queue executionRequestQue
 	if err != nil {
 		return nil, err
 	}
-	statedb, err := chain.blockchain.StateAt(prepared.Block.Header())
+	if err := chain.deriveReceiptFields(prepared.Block, receipts); err != nil {
+		return nil, err
+	}
+	var stableState *state.StateDB
+	var root common.Hash
+	if candidate != nil {
+		stableState, root, err = candidate.commit(
+			statedb, prepared.Block.NumberU64(), true,
+			chain.config.IsCancun(prepared.Block.Number(), prepared.Block.Time()),
+		)
+	} else {
+		trieDB := statedb.Database().TrieDB()
+		root, err = statedb.Commit(
+			prepared.Block.NumberU64(), true,
+			chain.config.IsCancun(prepared.Block.Number(), prepared.Block.Time()),
+		)
+		if err == nil {
+			parentRoot := chain.blockchain.CurrentBlock().Root
+			if root != parentRoot {
+				_ = trieDB.Reference(root, common.Hash{})
+			}
+			stableState, err = state.New(root, statedb.Database())
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
-	return &pendingView{block: prepared.Block, state: statedb, receipts: receipts}, nil
+	if root != prepared.Block.Root() {
+		return nil, fmt.Errorf("pending state root %s does not match block %s", root, prepared.Block.Root())
+	}
+	view := &pendingView{block: prepared.Block, state: stableState, receipts: receipts}
+	if root != chain.blockchain.CurrentBlock().Root {
+		view.referenced = cloneHashPointer(&root)
+		view.trie = stableState.Database().TrieDB()
+	}
+	return view, nil
 }
 
 func validateExecutionRequestControlSet(controls executionRequestControlSet) error {

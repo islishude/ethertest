@@ -18,6 +18,7 @@ import (
 	gethaccounts "github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
@@ -291,6 +292,43 @@ func TestSignAuthorizationRPC(t *testing.T) {
 	}
 	for _, method := range []string{"eth_signAuthorization", "anvil_signAuthorization", "evm_signAuthorization"} {
 		assertRPCErrorCode(t, client.Call(&raw, method, authority, args), -32601)
+	}
+}
+
+func TestEstimateGasIncludesSetCodeAuthorizationIntrinsicCost(t *testing.T) {
+	node, err := New(testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := node.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer node.Close() //nolint:errcheck
+	accounts := node.Accounts()
+	authorization, err := node.SignAuthorization(accounts[1], AuthorizationRequest{
+		ChainID: new(big.Int).Set(node.chain.config.ChainID), Address: accounts[2], Nonce: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := node.RPCClient()
+	defer client.Close()
+	var estimate hexutil.Uint64
+	if err := client.Call(&estimate, "eth_estimateGas", map[string]any{
+		"from": accounts[0], "to": accounts[0], "authorizationList": []types.SetCodeAuthorization{authorization},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pending := node.chain.pendingBlock()
+	rules := node.chain.config.Rules(pending.Number(), true, pending.Time())
+	want, err := core.IntrinsicGas(
+		nil, nil, []types.SetCodeAuthorization{authorization}, accounts[0], &accounts[0], new(uint256.Int), rules,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uint64(estimate) < want {
+		t.Fatalf("set-code estimate = %d, below intrinsic gas %d", estimate, want)
 	}
 }
 

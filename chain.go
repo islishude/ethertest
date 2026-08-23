@@ -1,8 +1,10 @@
 package ethertest
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"sync"
 	"time"
@@ -10,16 +12,20 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
+	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
+	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto/kzg4844"
+	"github.com/ethereum/go-ethereum/core/types/bal"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/ethdb/pebble"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/triedb"
 )
 
 var blobNamespace = []byte("ethertest/blob/")
@@ -37,6 +43,7 @@ type executionChain struct {
 	slotDuration         uint64
 	slotByHash           map[common.Hash]uint64
 	canonicalBlockBySlot map[uint64]common.Hash
+	beaconBlockByRoot    map[common.Hash]common.Hash
 	lastProcessedSlot    uint64
 	timelineComplete     bool
 	finalityPaused       bool
@@ -48,7 +55,7 @@ type executionChain struct {
 	pending              map[common.Address]map[uint64]*types.Transaction
 	arrival              map[common.Hash]uint64
 	nextArrival          uint64
-	blobs                map[common.Hash]*types.BlobTxSidecar
+	blobs                map[common.Hash]*blobBundle
 	order                string
 	pendingView          *pendingView
 }
@@ -59,6 +66,15 @@ type pendingView struct {
 	receipts   types.Receipts
 	executable map[common.Hash]struct{}
 	queued     map[common.Hash]struct{}
+	referenced *common.Hash
+	trie       *triedb.Database
+}
+
+type transactionPoolSnapshot struct {
+	pending     map[common.Address]map[uint64]*types.Transaction
+	arrival     map[common.Hash]uint64
+	nextArrival uint64
+	blobs       map[common.Hash]*blobBundle
 }
 
 // executionChainConfig pins ethertest's supported protocol surface. Do not
@@ -172,6 +188,10 @@ func newExecutionChain(cfg *Config, accounts []common.Address, suppliedGenesis *
 	} else if genesis == nil && cfg.Chain.GenesisTime == 0 {
 		cfg.Chain.GenesisTime = time.Now().UTC().Unix()
 	}
+	if err := cfg.validateResolved(); err != nil {
+		_ = database.Close() //nolint:errcheck
+		return nil, err
+	}
 	if genesis == nil {
 		chainConfig := executionChainConfig(*cfg)
 		genesis = core.DeveloperGenesisBlock(cfg.Chain.GasLimit, nil)
@@ -231,10 +251,11 @@ func newExecutionChain(cfg *Config, accounts []common.Address, suppliedGenesis *
 		feeRecipient: feeRecipient,
 		pending:      make(map[common.Address]map[uint64]*types.Transaction),
 		arrival:      make(map[common.Hash]uint64),
-		blobs:        make(map[common.Hash]*types.BlobTxSidecar), order: cfg.Mining.Order,
+		blobs:        make(map[common.Hash]*blobBundle), order: cfg.Mining.Order,
 		genesisTime: uint64(cfg.Chain.GenesisTime), genesisHash: blockchain.Genesis().Hash(),
 		externalGenesis: externalGenesis, slotDuration: uint64(cfg.Chain.SlotDuration / time.Second),
 		slot: currentSlot, slotByHash: slotByHash, canonicalBlockBySlot: canonicalBlockBySlot,
+		beaconBlockByRoot: make(map[common.Hash]common.Hash),
 		lastProcessedSlot: currentSlot, timelineComplete: true,
 		blockSafety: make(map[common.Hash]BlockSafety), taintReasons: make(map[string]struct{}),
 	}
@@ -332,31 +353,11 @@ func (c *executionChain) addTransaction(tx *types.Transaction) error {
 	}); err != nil {
 		return err
 	}
-	var encodedSidecar []byte
+	var retainedBundle *blobBundle
 	if sidecar := tx.BlobTxSidecar(); sidecar != nil {
-		switch sidecar.Version {
-		case types.BlobSidecarVersion0:
-			if len(sidecar.Blobs) != len(sidecar.Commitments) || len(sidecar.Blobs) != len(sidecar.Proofs) {
-				return fmt.Errorf("%w: malformed version 0 sidecar", txpool.ErrKZGVerificationError)
-			}
-			for index := range sidecar.Blobs {
-				if err := kzg4844.VerifyBlobProof(&sidecar.Blobs[index], sidecar.Commitments[index], sidecar.Proofs[index]); err != nil {
-					return fmt.Errorf("%w: %v", txpool.ErrKZGVerificationError, err)
-				}
-			}
-		case types.BlobSidecarVersion1:
-			if err := kzg4844.VerifyCellProofs(sidecar.Blobs, sidecar.Commitments, sidecar.Proofs); err != nil {
-				return fmt.Errorf("%w: %v", txpool.ErrKZGVerificationError, err)
-			}
-		default:
-			return fmt.Errorf("%w: unsupported sidecar version %d", txpool.ErrKZGVerificationError, sidecar.Version)
-		}
-		encodedSidecar, err = rlp.EncodeToBytes(sidecar)
+		retainedBundle, err = newBlobBundle(sidecar)
 		if err != nil {
-			return err
-		}
-		if err := c.db.Put(append(append([]byte(nil), blobNamespace...), tx.Hash().Bytes()...), encodedSidecar); err != nil {
-			return err
+			return fmt.Errorf("%w: %v", txpool.ErrKZGVerificationError, err)
 		}
 	}
 	if byNonce == nil {
@@ -366,15 +367,64 @@ func (c *executionChain) addTransaction(tx *types.Transaction) error {
 	if previous := byNonce[tx.Nonce()]; previous != nil {
 		c.arrival[tx.Hash()] = c.arrival[previous.Hash()]
 		delete(c.arrival, previous.Hash())
+		delete(c.blobs, previous.Hash())
 	} else {
 		c.nextArrival++
 		c.arrival[tx.Hash()] = c.nextArrival
 	}
 	byNonce[tx.Nonce()] = tx
-	if sidecar := tx.BlobTxSidecar(); sidecar != nil {
-		c.blobs[tx.Hash()] = sidecar.Copy()
+	if retainedBundle != nil {
+		c.blobs[tx.Hash()] = retainedBundle
 	}
 	return nil
+}
+
+func (c *executionChain) snapshotTransactionPool() transactionPoolSnapshot {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	snapshot := transactionPoolSnapshot{
+		pending: make(map[common.Address]map[uint64]*types.Transaction, len(c.pending)),
+		arrival: make(map[common.Hash]uint64, len(c.arrival)), nextArrival: c.nextArrival,
+		blobs: make(map[common.Hash]*blobBundle, len(c.blobs)),
+	}
+	for address, transactions := range c.pending {
+		snapshot.pending[address] = make(map[uint64]*types.Transaction, len(transactions))
+		maps.Copy(snapshot.pending[address], transactions)
+	}
+	maps.Copy(snapshot.arrival, c.arrival)
+	for hash, bundle := range c.blobs {
+		snapshot.blobs[hash] = bundle.copy()
+	}
+	return snapshot
+}
+
+func (c *executionChain) restoreTransactionPool(snapshot transactionPoolSnapshot) {
+	c.mu.Lock()
+	c.pending = snapshot.pending
+	c.arrival = snapshot.arrival
+	c.nextArrival = snapshot.nextArrival
+	c.blobs = snapshot.blobs
+	c.mu.Unlock()
+}
+
+func (c *executionChain) blobPuts(block *types.Block) ([]journalKV, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var puts []journalKV
+	for _, transaction := range block.Transactions() {
+		bundle := c.blobs[transaction.Hash()]
+		if bundle == nil {
+			continue
+		}
+		encoded, err := rlp.EncodeToBytes(bundle)
+		if err != nil {
+			return nil, err
+		}
+		puts = append(puts, journalKV{
+			Key: append(append([]byte(nil), blobNamespace...), transaction.Hash().Bytes()...), Value: encoded,
+		})
+	}
+	return puts, nil
 }
 
 func (c *executionChain) executableTransactions() ([]*types.Transaction, error) {
@@ -419,88 +469,219 @@ func (c *executionChain) transactionBefore(left, right *types.Transaction) bool 
 }
 
 func (c *executionChain) buildBlock(
+	ctx context.Context,
 	slotDuration uint64,
 	empty bool,
 	parentBeaconRoot common.Hash,
 	withdrawalRequests []WithdrawalRequest,
-) (block *types.Block, receipts types.Receipts, targetSlot uint64, executionRequests [][]byte, err error) {
+) (block *types.Block, receipts types.Receipts, postState *state.StateDB, candidate *candidateState, targetSlot uint64, executionRequests [][]byte, err error) {
+	c.mu.RLock()
+	targetSlot = c.slot + 1
+	c.mu.RUnlock()
+	if targetSlot == 0 {
+		return nil, nil, nil, nil, 0, nil, errors.New("next block slot overflows uint64")
+	}
+	return c.buildBlockAtSlot(ctx, slotDuration, empty, parentBeaconRoot, withdrawalRequests, targetSlot)
+}
+
+func (c *executionChain) buildBlockAtSlot(
+	ctx context.Context,
+	slotDuration uint64,
+	empty bool,
+	parentBeaconRoot common.Hash,
+	withdrawalRequests []WithdrawalRequest,
+	targetSlot uint64,
+) (block *types.Block, receipts types.Receipts, postState *state.StateDB, candidate *candidateState, slot uint64, executionRequests [][]byte, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	parentHeader := c.blockchain.CurrentBlock()
 	parent := c.blockchain.GetBlock(parentHeader.Hash(), parentHeader.Number.Uint64())
 	withdrawals, err := assignedWithdrawals(c.blockchain, parent, withdrawalRequests)
 	if err != nil {
-		return nil, nil, 0, nil, err
+		return nil, nil, nil, nil, 0, nil, err
 	}
 	txs, err := c.executableTransactions()
 	if err != nil {
-		return nil, nil, 0, nil, err
+		return nil, nil, nil, nil, 0, nil, err
 	}
 	if empty {
 		txs = nil
 	}
-	targetSlot = c.slot + 1
+	if targetSlot == 0 || targetSlot <= c.slot {
+		return nil, nil, nil, nil, 0, nil, errors.New("target block slot must advance the current slot")
+	}
+	if slotDuration != 0 && targetSlot > (^uint64(0)-c.genesisTime)/slotDuration {
+		return nil, nil, nil, nil, 0, nil, errors.New("next block timestamp overflows uint64")
+	}
 	targetTime := c.genesisTime + targetSlot*slotDuration
-	if len(txs) == 0 {
-		block, receipts, executionRequests, err = c.generateBlock(parent, targetTime, parentBeaconRoot, nil, withdrawals)
-		return block, receipts, targetSlot, executionRequests, err
+	candidate, initialState, err := newCandidateState(c.db, parent.Root())
+	if err != nil {
+		return nil, nil, nil, nil, 0, nil, err
 	}
-	// Build the candidate incrementally. A transaction that became invalid after
-	// a head change blocks only its own sender's nonce frontier; other senders
-	// remain eligible for the block.
-	signer := types.MakeSigner(c.config, new(big.Int).Add(parent.Number(), big.NewInt(1)), targetTime)
-	accepted := make([]*types.Transaction, 0, len(txs))
-	blocked := make(map[common.Address]struct{})
-	for _, tx := range txs {
-		from, senderErr := types.Sender(signer, tx)
-		if senderErr != nil {
-			continue
-		}
-		if _, exists := blocked[from]; exists {
-			continue
-		}
-		trial := append(append(make([]*types.Transaction, 0, len(accepted)+1), accepted...), tx)
-		if _, _, _, trialErr := c.generateBlock(parent, targetTime, parentBeaconRoot, trial, withdrawals); trialErr != nil {
-			blocked[from] = struct{}{}
-			continue
-		}
-		accepted = trial
-	}
-	block, receipts, executionRequests, err = c.generateBlock(parent, targetTime, parentBeaconRoot, accepted, withdrawals)
-	return block, receipts, targetSlot, executionRequests, err
+	block, receipts, postState, executionRequests, err = c.generateBlock(
+		ctx, parent, targetTime, parentBeaconRoot, txs, withdrawals, true, nil, initialState, nil,
+	)
+	return block, receipts, postState, candidate, targetSlot, executionRequests, err
 }
 
 func (c *executionChain) generateBlock(
+	ctx context.Context,
 	parent *types.Block,
 	targetTime uint64,
 	parentBeaconRoot common.Hash,
 	txs []*types.Transaction,
 	withdrawals types.Withdrawals,
-) (block *types.Block, receipts types.Receipts, executionRequests [][]byte, err error) {
+	skipInvalid bool,
+	extra []byte,
+	initialState *state.StateDB,
+	feeRecipient *common.Address,
+) (block *types.Block, receipts types.Receipts, postState *state.StateDB, executionRequests [][]byte, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("block generation failed: %v", recovered)
-			block, receipts, executionRequests = nil, nil, nil
+			block, receipts, postState, executionRequests = nil, nil, nil, nil
 		}
 	}()
-	blocks, receiptSets := core.GenerateChain(c.config, parent, c.blockchain.Engine(), c.db, 1, func(_ int, gen *core.BlockGen) {
-		gen.OffsetTime(int64(targetTime) - int64(gen.Timestamp()))
-		gen.SetPoS()
-		gen.SetCoinbase(c.feeRecipient)
-		gen.SetParentBeaconRoot(parentBeaconRoot)
-		addWithdrawals(gen, withdrawals)
-		for _, tx := range txs {
-			gen.AddTxWithChain(c.blockchain, tx.WithoutBlobTxSidecar())
-		}
-		executionRequests = cloneExecutionRequestBytes(gen.ConsensusLayerRequests())
-	})
-	block = blocks[0]
-	receipts = receiptSets[0]
-	block = replaceGeneratedWithdrawals(block, receipts, withdrawals)
-	if err := verifyExecutionRequestsHash(block, executionRequests); err != nil {
-		return nil, nil, nil, err
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, nil, err
 	}
-	return block, receipts, executionRequests, nil
+	parentHeader := parent.Header()
+	if parent.Number().Sign() < 0 || parent.Number().BitLen() > 64 || parent.NumberU64() == ^uint64(0) {
+		return nil, nil, nil, nil, errors.New("next block number overflows uint64")
+	}
+	coinbase := c.feeRecipient
+	if feeRecipient != nil {
+		coinbase = *feeRecipient
+	}
+	header := &types.Header{
+		ParentHash: parent.Hash(), Coinbase: coinbase,
+		Number: new(big.Int).Add(parent.Number(), big.NewInt(1)), GasLimit: parent.GasLimit(),
+		Time: targetTime, Difficulty: new(big.Int), Extra: append([]byte(nil), extra...),
+	}
+	if c.config.IsLondon(header.Number) {
+		header.BaseFee = eip1559.CalcBaseFee(c.config, parentHeader)
+		if !c.config.IsLondon(parent.Number()) {
+			parentGasLimit := parent.GasLimit() * c.config.ElasticityMultiplier()
+			header.GasLimit = core.CalcGasLimit(parentGasLimit, parentGasLimit)
+		}
+	}
+	if c.config.IsCancun(header.Number, header.Time) {
+		excess := eip4844.CalcExcessBlobGas(c.config, parentHeader, targetTime)
+		header.ExcessBlobGas = &excess
+		header.BlobGasUsed = new(uint64)
+		header.ParentBeaconRoot = &parentBeaconRoot
+	}
+	if err := c.blockchain.Engine().Prepare(c.blockchain, header); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	postState = initialState
+	if postState == nil {
+		postState, err = c.blockchain.StateAt(parentHeader)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	blockAccessList := bal.NewConstructionBlockAccessList()
+	preEVM := vm.NewEVM(core.NewEVMBlockContext(header, c.blockchain, nil), postState, c.config, vm.Config{})
+	blockAccessList.Merge(core.PreExecution(ctx, header.ParentBeaconRoot, parentHeader, c.config, preEVM, header.Number, header.Time))
+	preEVM.Release()
+
+	gasPool := core.NewGasPool(header.GasLimit)
+	signer := types.MakeSigner(c.config, header.Number, header.Time)
+	accepted := make([]*types.Transaction, 0, len(txs))
+	receipts = make(types.Receipts, 0, len(txs))
+	allLogs := make([]*types.Log, 0)
+	blocked := make(map[common.Address]struct{})
+	for _, transaction := range txs {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, nil, nil, err
+		}
+		tx := transaction.WithoutBlobTxSidecar()
+		from, senderErr := types.Sender(signer, tx)
+		if senderErr != nil {
+			if skipInvalid {
+				continue
+			}
+			return nil, nil, nil, nil, senderErr
+		}
+		if _, exists := blocked[from]; exists {
+			continue
+		}
+		message, messageErr := core.TransactionToMessage(tx, signer, header.BaseFee)
+		if messageErr != nil {
+			if skipInvalid {
+				blocked[from] = struct{}{}
+				continue
+			}
+			return nil, nil, nil, nil, messageErr
+		}
+		stateSnapshot := postState.Snapshot()
+		gasSnapshot := gasPool.Snapshot()
+		index := len(accepted)
+		postState.SetTxContext(tx.Hash(), index, uint32(index+1))
+		txEVM := vm.NewEVM(core.NewEVMBlockContext(header, c.blockchain, nil), postState, c.config, vm.Config{})
+		txEVM.SetTxContext(core.NewEVMTxContext(message))
+		receipt, accessList, applyErr := core.ApplyTransactionWithEVM(
+			message, gasPool, postState, header.Number, header.Hash(), header.Time, tx, txEVM,
+		)
+		txEVM.Release()
+		if applyErr != nil {
+			postState.RevertToSnapshot(stateSnapshot)
+			gasPool.Set(gasSnapshot)
+			if skipInvalid {
+				blocked[from] = struct{}{}
+				continue
+			}
+			return nil, nil, nil, nil, applyErr
+		}
+		accepted = append(accepted, tx)
+		receipts = append(receipts, receipt)
+		allLogs = append(allLogs, receipt.Logs...)
+		blockAccessList.Merge(accessList)
+		if header.BlobGasUsed != nil {
+			*header.BlobGasUsed += receipt.BlobGasUsed
+		}
+	}
+	header.GasUsed = gasPool.Used()
+	postEVM := vm.NewEVM(core.NewEVMBlockContext(header, c.blockchain, nil), postState, c.config, vm.Config{})
+	executionRequests, requestAccessList, err := core.PostExecution(
+		ctx, c.config, header.Number, header.Time, allLogs, postEVM, uint32(len(accepted)+1),
+	)
+	postEVM.Release()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	blockAccessList.Merge(requestAccessList)
+	if executionRequests != nil {
+		hash := types.CalcRequestsHash(executionRequests)
+		header.RequestsHash = &hash
+	}
+	body := &types.Body{Transactions: accepted, Withdrawals: withdrawals}
+	if c.config.IsShanghai(header.Number, header.Time) && body.Withdrawals == nil {
+		body.Withdrawals = types.Withdrawals{}
+	}
+	c.blockchain.Engine().Finalize(c.blockchain, header, postState, body, uint32(len(accepted)+1), blockAccessList)
+	if err := postState.Error(); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	block = core.AssembleBlock(c.blockchain, header, postState, body, receipts, blockAccessList)
+	if err := c.deriveReceiptFields(block, receipts); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := verifyExecutionRequestsHash(block, executionRequests); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return block, receipts, postState, cloneExecutionRequestBytes(executionRequests), nil
+}
+
+func (c *executionChain) deriveReceiptFields(block *types.Block, receipts types.Receipts) error {
+	var blobGasPrice *big.Int
+	if block.ExcessBlobGas() != nil {
+		blobGasPrice = eip4844.CalcBlobFee(c.config, block.Header())
+	}
+	return receipts.DeriveFields(
+		c.config, block.Hash(), block.NumberU64(), block.Time(), block.BaseFee(), blobGasPrice, block.Transactions(),
+	)
 }
 
 func (c *executionChain) applyCanonicalBlock(block *types.Block, targetSlot uint64) {
@@ -511,6 +692,7 @@ func (c *executionChain) applyCanonicalBlock(block *types.Block, targetSlot uint
 		from, senderErr := types.Sender(signer, tx)
 		if senderErr == nil {
 			delete(c.arrival, tx.Hash())
+			delete(c.blobs, tx.Hash())
 			delete(c.pending[from], tx.Nonce())
 			if len(c.pending[from]) == 0 {
 				delete(c.pending, from)
@@ -562,22 +744,22 @@ func (c *executionChain) currentSlot() uint64 {
 	return c.slot
 }
 
-func (c *executionChain) blobSidecar(hash common.Hash) *types.BlobTxSidecar {
+func (c *executionChain) blobSidecarForVersion(hash common.Hash, version byte) *types.BlobTxSidecar {
 	c.mu.RLock()
-	if sidecar := c.blobs[hash]; sidecar != nil {
+	if bundle := c.blobs[hash]; bundle != nil {
 		c.mu.RUnlock()
-		return sidecar.Copy()
+		return bundle.sidecar(version)
 	}
 	c.mu.RUnlock()
 	encoded, err := c.db.Get(append(append([]byte(nil), blobNamespace...), hash.Bytes()...))
 	if err != nil {
 		return nil
 	}
-	var sidecar types.BlobTxSidecar
-	if rlp.DecodeBytes(encoded, &sidecar) != nil {
+	var bundle blobBundle
+	if rlp.DecodeBytes(encoded, &bundle) != nil || bundle.validate() != nil {
 		return nil
 	}
-	return sidecar.Copy()
+	return bundle.sidecar(version)
 }
 
 func (c *executionChain) pendingCount() int {
@@ -602,9 +784,13 @@ func (c *executionChain) setFeeRecipient(address common.Address) {
 	c.mu.Unlock()
 }
 
-func (c *executionChain) setPendingView(block *types.Block, statedb *state.StateDB, receipts types.Receipts) {
+func (c *executionChain) setPendingView(view *pendingView) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.pendingView != nil && c.pendingView.referenced != nil {
+		_ = c.pendingView.trie.Dereference(*c.pendingView.referenced)
+	}
+	block, statedb, receipts := view.block, view.state, view.receipts
 	executable := make(map[common.Hash]struct{}, len(block.Transactions()))
 	for _, tx := range block.Transactions() {
 		executable[tx.Hash()] = struct{}{}
@@ -619,7 +805,7 @@ func (c *executionChain) setPendingView(block *types.Block, statedb *state.State
 	}
 	c.pendingView = &pendingView{
 		block: block, state: statedb.Copy(), receipts: receipts,
-		executable: executable, queued: queued,
+		executable: executable, queued: queued, referenced: cloneHashPointer(view.referenced), trie: view.trie,
 	}
 }
 

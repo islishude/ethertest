@@ -27,9 +27,10 @@ reached the target, and fails closed when neither state matches. Events, request
 queue changes and consumed IDs, Beacon projections, and slot/safety metadata
 share the auxiliary batch.
 
-The alpha metadata layout is updated in place. There is no v2 schema or data
-migration path: a nonempty database without the current metadata marker is
-rejected with an instruction to create a fresh chain.
+The alpha metadata layout is schema v2. There is no migration path from schema
+v1: an old or marker-less database is rejected with an instruction to create a
+fresh chain. New Pebble databases are fully initialized in a sibling staging
+directory before they atomically replace the requested empty destination.
 For a new generated chain, `genesis_time = 0` is resolved once; subsequent
 Pebble starts load that value from the timeline before constructing geth's
 genesis block. An explicit conflicting value fails closed.
@@ -46,9 +47,11 @@ persisted. The session taint bit is monotonic even when a reorg returns the head
 to a clean branch.
 
 The transaction pool is local and deterministic rather than geth's network
-pool. A single-writer rebuilds an immutable candidate block, post-execution
-state, receipts, and executable/queued classification after head or pool
-changes. All pending state queries resolve through that candidate.
+pool. A single-writer assembles each immutable candidate exactly once through
+geth's public pre-execution, transaction, post-execution, finalization, and block
+assembly APIs. Candidate trie/code writes stay in a read-through memory layer;
+all pending state queries resolve through that candidate and never mutate the
+authoritative database.
 
 Runtime wallet membership is ephemeral control-plane state. It is deliberately
 independent of snapshots, checkpoints, branches, databases, and archives.
@@ -115,7 +118,7 @@ The network advertises `consensusMode: synthetic`, `beaconApi: v4-subset`,
 - remote state forking;
 - execution or consensus P2P;
 - Engine API;
-- GraphQL and IPC;
+- GraphQL;
 - JavaScript tracers;
 - external validator clients;
 - production deployment or large-scale indexing.

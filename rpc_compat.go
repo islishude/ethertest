@@ -20,7 +20,7 @@ func (*web3API) Sha3(input hexutil.Bytes) hexutil.Bytes {
 }
 
 func (api *minerAPI) Start(ctx context.Context, _ *int) (bool, error) {
-	_, err := api.node.execute(ctx, func(_ *executionChain) (any, error) {
+	_, err := api.node.executeWrite(ctx, func(_ *executionChain) (any, error) {
 		mode := api.node.resumeMode()
 		api.node.setMiningMode(mode)
 		api.node.logger.Info("mining mode changed", "event", "mining_mode_changed", "mode", mode)
@@ -29,7 +29,7 @@ func (api *minerAPI) Start(ctx context.Context, _ *int) (bool, error) {
 	return err == nil, err
 }
 func (api *minerAPI) Stop(ctx context.Context) (bool, error) {
-	_, err := api.node.execute(ctx, func(_ *executionChain) (any, error) {
+	_, err := api.node.executeWrite(ctx, func(_ *executionChain) (any, error) {
 		api.node.setMiningMode(miningModeManual)
 		api.node.logger.Info("mining mode changed", "event", "mining_mode_changed", "mode", miningModeManual)
 		return nil, nil
@@ -38,9 +38,11 @@ func (api *minerAPI) Stop(ctx context.Context) (bool, error) {
 }
 
 func (api *minerAPI) SetEtherbase(ctx context.Context, address common.Address) (bool, error) {
-	_, err := api.node.execute(ctx, func(chain *executionChain) (any, error) {
+	_, err := api.node.executeWrite(ctx, func(chain *executionChain) (any, error) {
+		previous := chain.feeRecipientAddress()
 		chain.setFeeRecipient(address)
-		if err := api.node.rebuildPendingView(chain); err != nil {
+		if err := api.node.rebuildPendingView(ctx, chain); err != nil {
+			chain.setFeeRecipient(previous)
 			return nil, err
 		}
 		api.node.logger.Info("fee recipient changed",

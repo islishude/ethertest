@@ -36,6 +36,14 @@ func TestDefaultAccountsMatchAnvil(t *testing.T) {
 	}
 }
 
+func TestDeriveAccountsRejectsUnsafeCounts(t *testing.T) {
+	for _, count := range []int{-1, 0, 1025} {
+		if _, err := DeriveAccounts(DefaultMnemonic, count); err == nil {
+			t.Fatalf("account count %d was accepted", count)
+		}
+	}
+}
+
 func TestStrictTOML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bad.toml")
 	if err := os.WriteFile(path, []byte("[chain]\nunknown = 1\n"), 0o600); err != nil {
@@ -222,5 +230,69 @@ func TestLogConfigurationValidation(t *testing.T) {
 	cfg.Log.ProgressInterval = time.Second - 1
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected short progress interval rejection")
+	}
+}
+
+func TestResourceLimitDefaultsEnvironmentAndPreflight(t *testing.T) {
+	defaults := DefaultConfig().Limits
+	if defaults.MaxControlOperations != 256 || defaults.MaxLogBlocks != 10_000 ||
+		defaults.MaxLogResults != 10_000 || defaults.RPCGasCap != 50_000_000 ||
+		defaults.TraceTimeout != 5*time.Second || defaults.MaxFilters != 1024 ||
+		defaults.MaxSubscriptions != 1024 || defaults.FilterTimeout != 5*time.Minute {
+		t.Fatalf("resource defaults = %#v", defaults)
+	}
+	t.Setenv("ETHERTEST_MAX_CONTROL_OPERATIONS", "7")
+	t.Setenv("ETHERTEST_MAX_LOG_BLOCKS", "8")
+	t.Setenv("ETHERTEST_MAX_LOG_RESULTS", "9")
+	t.Setenv("ETHERTEST_RPC_GAS_CAP", "21000")
+	t.Setenv("ETHERTEST_TRACE_TIMEOUT", "2s")
+	t.Setenv("ETHERTEST_MAX_FILTERS", "10")
+	t.Setenv("ETHERTEST_MAX_SUBSCRIPTIONS", "11")
+	t.Setenv("ETHERTEST_FILTER_TIMEOUT", "3m")
+	cfg, err := ReadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Limits.MaxControlOperations != 7 || cfg.Limits.MaxLogBlocks != 8 ||
+		cfg.Limits.MaxLogResults != 9 || cfg.Limits.RPCGasCap != 21_000 ||
+		cfg.Limits.TraceTimeout != 2*time.Second || cfg.Limits.MaxFilters != 10 ||
+		cfg.Limits.MaxSubscriptions != 11 || cfg.Limits.FilterTimeout != 3*time.Minute {
+		t.Fatalf("resource environment = %#v", cfg.Limits)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	invalid := testConfig()
+	invalid.Storage.Engine = "pebble"
+	invalid.Storage.Path = filepath.Join(t.TempDir(), "must-not-exist")
+	invalid.Mining.FeeRecipient = "not-an-address"
+	if _, err := New(invalid); err == nil {
+		t.Fatal("invalid fee recipient was accepted")
+	}
+	if _, err := os.Stat(invalid.Storage.Path); !os.IsNotExist(err) {
+		t.Fatalf("invalid configuration created storage: %v", err)
+	}
+}
+
+func TestNonPebbleStorageDirectoryIsNotPolluted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "occupied")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "keep.txt"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.Storage.Engine, cfg.Storage.Path = "pebble", path
+	if _, err := New(cfg); err == nil {
+		t.Fatal("non-Pebble directory was accepted as storage")
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "keep.txt" {
+		t.Fatalf("storage preflight polluted directory: %#v", entries)
 	}
 }

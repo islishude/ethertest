@@ -1,6 +1,7 @@
 package ethertest
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 func (n *Node) startServers() error {
 	ethService := &ethAPI{node: n, filters: make(map[rpc.ID]*installedFilter)}
+	ethService.startFilterReaper(n.rootCtx)
 	apis := []rpc.API{
 		{Namespace: "eth", Service: ethService},
 		{Namespace: "net", Service: &netAPI{n}},
@@ -52,15 +54,17 @@ func (n *Node) startServers() error {
 		}
 		n.ipcListener, n.ipcServer, n.ipcEndpoint = listener, ipcServer, endpoint
 		n.ipcStopping.Store(false)
+		n.ipcServeDone = make(chan struct{})
 		go func() {
-			serveErr := ipcServer.ServeListener(listener)
-			if serveErr != nil && !n.ipcStopping.Load() {
+			defer close(n.ipcServeDone)
+			serveErr := n.serveIPC(ipcServer, listener)
+			if !n.ipcStopping.Load() {
 				n.logger.Error("IPC server failed",
 					"event", "ipc_server_failed",
 					"endpoint", endpoint,
 					"error", serveErr,
 				)
-				n.stopSignal.Do(func() { close(n.stopping) })
+				n.requestStop(serveErr)
 			}
 		}()
 		n.logger.Info("IPC endpoint opened", "event", "ipc_endpoint_opened", "endpoint", endpoint)
@@ -77,8 +81,10 @@ func (n *Node) startServers() error {
 			scheme = "https"
 		}
 		n.httpEndpoint = scheme + "://" + listener.Addr().String()
+		n.httpListener = listener
 		beaconHandler := n.beaconHandler()
-		handler := corsHandler(n.cfg.HTTP.CORS, n.cfg.Limits.MaxRequestBytes, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		websocketHandler := n.websocketHandler(server)
+		handler := n.trackHTTPHandler(responseLimitHandler(n.cfg.Limits.MaxResponseBytes, corsHandler(n.cfg.HTTP.CORS, n.cfg.Limits.MaxRequestBytes, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(r.URL.Path, "/eth/") {
 				if n.cfg.Beacon.Enabled {
 					beaconHandler.ServeHTTP(w, r)
@@ -88,12 +94,16 @@ func (n *Node) startServers() error {
 				return
 			}
 			if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-				server.WebsocketHandler(n.cfg.HTTP.CORS).ServeHTTP(w, r)
+				websocketHandler.ServeHTTP(w, r)
 				return
 			}
 			server.ServeHTTP(w, r)
-		}))
-		n.httpServer = &http.Server{Addr: n.cfg.HTTP.Address, Handler: handler, ReadHeaderTimeout: 5 * 1e9}
+		}))))
+		n.httpServer = &http.Server{
+			Addr: n.cfg.HTTP.Address, Handler: handler, ReadHeaderTimeout: 5 * 1e9,
+			ReadTimeout: 30 * 1e9, IdleTimeout: 120 * 1e9,
+			BaseContext: func(net.Listener) context.Context { return n.rootCtx },
+		}
 		go func() {
 			var serveErr error
 			if n.cfg.HTTP.TLS.CertFile != "" {
@@ -101,13 +111,16 @@ func (n *Node) startServers() error {
 			} else {
 				serveErr = n.httpServer.Serve(listener)
 			}
-			if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			n.lifecycleMu.Lock()
+			expectedStop := n.lifecycle == nodeLifecycleStopping || n.lifecycle == nodeLifecycleStopped || n.closing
+			n.lifecycleMu.Unlock()
+			if serveErr != nil && (!errors.Is(serveErr, http.ErrServerClosed) || !expectedStop) {
 				n.logger.Error("HTTP server failed",
 					"event", "http_server_failed",
 					"address", n.httpEndpoint,
 					"error", serveErr,
 				)
-				n.stopSignal.Do(func() { close(n.stopping) })
+				n.requestStop(serveErr)
 			}
 		}()
 	}
@@ -117,6 +130,8 @@ func (n *Node) startServers() error {
 func (n *Node) newRPCServer(apis []rpc.API) (*rpc.Server, error) {
 	server := rpc.NewServer()
 	server.SetBatchLimits(n.cfg.Limits.MaxBatchItems, int(n.cfg.Limits.MaxResponseBytes))
+	server.SetHTTPBodyLimit(int(n.cfg.Limits.MaxRequestBytes))
+	server.SetWebsocketReadLimit(n.cfg.Limits.MaxRequestBytes)
 	for _, api := range apis {
 		if err := server.RegisterName(api.Namespace, api.Service); err != nil {
 			server.Stop()
@@ -140,10 +155,15 @@ func (n *Node) stopIPC() error {
 		}
 		n.ipcListener = nil
 	}
+	if n.ipcServeDone != nil {
+		<-n.ipcServeDone
+		n.ipcServeDone = nil
+	}
 	if n.ipcServer != nil {
 		n.ipcServer.Stop()
 		n.ipcServer = nil
 	}
+	n.ipcHandlers.Wait()
 	n.logger.Info("IPC endpoint closed", "event", "ipc_endpoint_closed", "endpoint", endpoint)
 	return err
 }

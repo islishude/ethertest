@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	gethaccounts "github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
@@ -840,6 +841,105 @@ func TestBeta7FilterReorgReplacementAutoMineAndRingGaps(t *testing.T) {
 			t.Fatalf("pending gap cursor was not advanced: %#v, %v", hashes, err)
 		}
 	})
+}
+
+func TestGetLogsDefaultsAndSyntheticFinalityTags(t *testing.T) {
+	cfg := testConfig()
+	cfg.Mining.Mode = miningModeManual
+	node := startRPCNode(t, cfg)
+	client := node.RPCClient()
+	defer client.Close()
+	contract := common.HexToAddress("0x2000000000000000000000000000000000000010")
+	var controlHash common.Hash
+	if err := client.Call(&controlHash, "ethertest_setCode", contract, hexutil.Bytes{0x60, 0x00, 0x60, 0x00, 0xa0, 0x00}); err != nil {
+		t.Fatal(err)
+	}
+	var transactionHash common.Hash
+	if err := client.Call(&transactionHash, "eth_sendTransaction", map[string]any{
+		"from": node.Accounts()[0], "to": contract, "nonce": "0x0", "gas": "0x186a0",
+		"maxFeePerGas": "0xb2d05e00", "maxPriorityFeePerGas": "0x3b9aca00",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.Mine(context.Background(), 1, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.Mine(context.Background(), 2*cfg.Chain.SlotsPerEpoch, true); err != nil {
+		t.Fatal(err)
+	}
+	var logs []*types.Log
+	if err := client.Call(&logs, "eth_getLogs", map[string]any{"address": contract}); err != nil || len(logs) != 0 {
+		t.Fatalf("default latest logs = %#v, %v", logs, err)
+	}
+	if err := client.Call(&logs, "eth_getLogs", map[string]any{
+		"address": contract, "fromBlock": "finalized", "toBlock": "finalized",
+	}); err != nil || len(logs) != 1 {
+		t.Fatalf("finalized logs = %#v, %v", logs, err)
+	}
+	if err := client.Call(&logs, "eth_getLogs", map[string]any{
+		"address": contract, "fromBlock": "safe", "toBlock": "safe",
+	}); err != nil || len(logs) != 0 {
+		t.Fatalf("safe logs = %#v, %v", logs, err)
+	}
+	assertRPCErrorCode(t, client.Call(&logs, "eth_getLogs", map[string]any{
+		"fromBlock": "pending", "toBlock": "latest",
+	}), -32000)
+
+	limited := cfg
+	limited.Limits.MaxLogBlocks = 1
+	limitedNode := startRPCNode(t, limited)
+	limitedClient := limitedNode.RPCClient()
+	defer limitedClient.Close()
+	if _, err := limitedNode.Mine(context.Background(), 1, true); err != nil {
+		t.Fatal(err)
+	}
+	assertRPCErrorCode(t, limitedClient.Call(&logs, "eth_getLogs", map[string]any{
+		"fromBlock": "earliest", "toBlock": "latest",
+	}), -38026)
+}
+
+func TestPollingFilterLimitAndExpiry(t *testing.T) {
+	cfg := testConfig()
+	cfg.Limits.MaxFilters = 1
+	cfg.Limits.FilterTimeout = 20 * time.Millisecond
+	node := startRPCNode(t, cfg)
+	client := node.RPCClient()
+	defer client.Close()
+	var first, second rpc.ID
+	if err := client.Call(&first, "eth_newBlockFilter"); err != nil {
+		t.Fatal(err)
+	}
+	assertRPCErrorCode(t, client.Call(&second, "eth_newPendingTransactionFilter"), -38026)
+	time.Sleep(30 * time.Millisecond)
+	if err := client.Call(&second, "eth_newPendingTransactionFilter"); err != nil || second == "" {
+		t.Fatalf("filter after expiry = %s, %v", second, err)
+	}
+	var changes []common.Hash
+	if err := client.Call(&changes, "eth_getFilterChanges", first); err == nil {
+		t.Fatal("expired filter remained installed")
+	}
+}
+
+func TestPollingFilterResourceFailureDoesNotAdvanceCursor(t *testing.T) {
+	cfg := testConfig()
+	cfg.Mining.Mode = miningModeManual
+	cfg.Limits.MaxLogResults = 1
+	node := startRPCNode(t, cfg)
+	client := node.RPCClient()
+	defer client.Close()
+	var filter rpc.ID
+	if err := client.Call(&filter, "eth_newBlockFilter"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.Mine(t.Context(), 2, true); err != nil {
+		t.Fatal(err)
+	}
+	var hashes []common.Hash
+	assertRPCErrorCode(t, client.Call(&hashes, "eth_getFilterChanges", filter), -38026)
+	node.cfg.Limits.MaxLogResults = 2
+	if err := client.Call(&hashes, "eth_getFilterChanges", filter); err != nil || len(hashes) != 2 {
+		t.Fatalf("filter cursor advanced after resource failure: %#v, %v", hashes, err)
+	}
 }
 
 func startRPCNode(t *testing.T, cfg Config) *Node {
