@@ -9,9 +9,9 @@ require (
 	github.com/attestantio/go-eth2-client v0.29.0
 	github.com/ethereum/go-ethereum v1.17.5
 	github.com/golang/snappy v1.0.1-0.20260716114414-9ae09f520e93
-	github.com/gorilla/websocket v1.4.2
+	github.com/gorilla/websocket v1.5.3
 	github.com/holiman/uint256 v1.3.2
-	github.com/klauspost/compress v1.19.1
+	github.com/klauspost/compress v1.19.2
 	github.com/protolambda/bls12-381-util v0.1.0
 	github.com/tyler-smith/go-bip32 v1.0.0
 	github.com/tyler-smith/go-bip39 v1.1.0
