@@ -1,4 +1,4 @@
-# Derived from ethereum/consensus-specs v1.6.1 minimal preset and config.
+# Derived from ethereum/consensus-specs v1.7.0-beta.2 minimal preset and config.
 # This is the complete set of upstream constants consumed directly by the
 # ethertest synthetic consensus implementation.
 PRESET_BASE: minimal
@@ -20,3 +20,13 @@ NUMBER_OF_COLUMNS: 128
 DENEB_FORK_VERSION: 0x04000000
 ELECTRA_FORK_VERSION: 0x05000000
 FULU_FORK_VERSION: 0x06000000
+GLOAS_FORK_VERSION: 0x07000000
+PTC_SIZE: 16
+MAX_PAYLOAD_ATTESTATIONS: 4
+MAX_BUILDER_DEPOSIT_REQUESTS_PER_PAYLOAD: 64
+MAX_BUILDER_EXIT_REQUESTS_PER_PAYLOAD: 16
+DOMAIN_BEACON_BUILDER: 0x0B000000
+# Preserve the existing Beacon container widths; the consensus model remains
+# synthetic and is not a full minimal-preset BeaconState implementation.
+SYNC_COMMITTEE_SIZE: 512
+MAX_COMMITTEES_PER_SLOT: 64

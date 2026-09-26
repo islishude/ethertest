@@ -330,7 +330,7 @@ rpcTest('viem typed public and wallet actions exercise the canonical RPC path', 
   const callResult = await publicClient.call({ account: account0.address, to: account2 })
   assert.equal(callResult.data, undefined)
   const accessList = await publicClient.createAccessList({ account: account0.address, to: account2 })
-  assert.equal(accessList.gasUsed, 21_000n)
+  assert.equal(accessList.gasUsed, 15_000n)
   assert.deepEqual(accessList.accessList, [])
   const simulations = await publicClient.simulateBlocks({
     blocks: [{ calls: [{ account: account0.address, to: account2, value: 1n }] }],
@@ -523,7 +523,8 @@ rpcTest('cast typed commands and raw RPC calls exercise the CLI compatibility pa
       '--rpc-url',
       rpcUrl,
     ),
-    '21000',
+    // account2 now delegates through EIP-7702; Amsterdam charges that access.
+    '24000',
   )
   assert.equal(await cast('call', account2, '--rpc-url', rpcUrl), '0x')
 
@@ -561,6 +562,10 @@ rpcTest('cast typed commands and raw RPC calls exercise the CLI compatibility pa
   assert.match(await castRpc('debug_getRawTransaction', [castHash]), /^0x[0-9a-f]+$/)
   assert((await castRpc('eth_capabilities')).blocks)
   assert((await castRpc('eth_config')).current)
+  assert(Array.isArray(await castRpc('eth_getBlockAccessList', ['latest'])))
+  assert.match(await castRpc('debug_getRawBlockAccessList', ['latest']), /^0x[0-9a-f]+$/)
+  assert.equal(typeof latest.slotNumber, 'string')
+  assert(isHash(latest.blockAccessListHash))
   const storage = await castRpc('eth_getStorageValues', [
     { [account9]: [zeroHash] },
     'latest',

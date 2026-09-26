@@ -1,5 +1,5 @@
 format = 1
-generated_at = "2026-08-01T00:00:00Z"
+generated_at = "2026-09-25T00:00:00Z"
 
 # Go dependencies are additionally locked by go.mod and go.sum. Normal builds
 # never fetch the specification repositories. spec_lock_test.go verifies every
@@ -8,7 +8,7 @@ generated_at = "2026-08-01T00:00:00Z"
 [[source]]
 name = "go-ethereum"
 url = "https://github.com/ethereum/go-ethereum"
-ref = "v1.17.5"
+ref = "v1.17.6"
 kind = "go-module"
 
 [[source]]
@@ -24,26 +24,27 @@ ref = "v1.0.0-beta.7"
 commit = "5aebdfdd45cadeb723be4bd45b4611b71c8b1c85"
 kind = "vendored-spec"
 subset = "specs/upstream/execution-rpc-subset.json"
-subset_sha256 = "9eaa65b5af7ac2b7204ff4d16d93b488837b778d602a43195629234226c502ab"
+subset_sha256 = "138f2882b36cf88b16b2435d8df2da6feaaa3c1be96124e5b16a848322af687a"
 
 [[source]]
 name = "beacon-APIs"
 url = "https://github.com/ethereum/beacon-APIs"
-ref = "v4.0.0"
-commit = "88fc9402c6a1821b6e9ae4e3b8ae0a22f1141203"
+ref = "a3f065439204a19f6661a0ecfe18ac74e5f15bc0"
+commit = "a3f065439204a19f6661a0ecfe18ac74e5f15bc0"
 kind = "vendored-spec"
 subset = "specs/upstream/beacon-api-subset.yaml"
-subset_sha256 = "6481a32bece497297ad5db9f379a352cfa0097be656b1fdd09e971000b73ec87"
+subset_sha256 = "c383d4759b55265491277efb57013377e60e7bc96d7834cb8259e7b43231d132"
 generated = "beacon_contract_generated.go"
-generated_sha256 = "07b93a075de8cd5a341f30df8c37ca56125864c5052c1af6fbd6fef868cda32f"
+generated_sha256 = "96b9750db2ab156e5f341c479b399cc87079702f2f323f519f959173f45e4431"
 
 [[source]]
 name = "consensus-specs"
 url = "https://github.com/ethereum/consensus-specs"
-ref = "v1.6.1"
+ref = "v1.7.0-beta.2"
+commit = "5afdff62889b1a13a5be804c8be8763abf1c8654"
 kind = "vendored-preset"
 subset = "specs/upstream/ethertest-minimal.yaml"
-subset_sha256 = "654186d7415a0add03f59c54911f64ee7e8e1ad40cb0f79e9d817ba5a62917dc"
+subset_sha256 = "c54fcc8260093c28e9c24ec01fd318f443abb4a078eb7ce92b8783d66eb2fca9"
 
 [[source]]
 name = "c-kzg-4844"
@@ -71,3 +72,14 @@ ref = "10eaa63d5da2f50b63d4359968f36542212f9f50"
 kind = "vendored-test-vector"
 subset = "testdata/vectors/execution-spec-tests-eip4788/timestamp_sequences.json"
 subset_sha256 = "db3c22489d1b569b347222742f8430fb4f26cb98657dce61b74b137d8d73b375"
+
+[[source]]
+name = "ssz-specs-gloas-reference"
+url = "https://github.com/ethereum/ssz-specs"
+ref = "608fa1b7d056021c66210e56454475b176c95914"
+commit = "608fa1b7d056021c66210e56454475b176c95914"
+kind = "reference-generated-test-vector"
+subset = "testdata/vectors/gloas/generate.py"
+subset_sha256 = "7520e395162e77856a7a0dd43bcbebce6a1b9e046730909b2c3e83e8edf800d6"
+generated = "testdata/vectors/gloas/vectors.json"
+generated_sha256 = "279e193f4faa5d9a51b1f02f2381b0fb5c7a2c5234b4cdcc685df0db4a9dda73"

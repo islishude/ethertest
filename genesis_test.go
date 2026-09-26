@@ -27,7 +27,7 @@ import (
 func externalGenesisForTest(t *testing.T, cfg Config, chainID uint64, pragueEpoch, osakaEpoch uint64) *core.Genesis {
 	t.Helper()
 	cfg.Chain.ChainID = chainID
-	cfg.Chain.Forks = ForkConfig{CancunEpoch: 0, PragueEpoch: pragueEpoch, OsakaEpoch: osakaEpoch}
+	cfg.Chain.Forks = ForkConfig{AmsterdamEpoch: -1, CancunEpoch: 0, PragueEpoch: pragueEpoch, OsakaEpoch: osakaEpoch}
 	genesis := core.DeveloperGenesisBlock(31_000_000, nil)
 	genesis.Config = executionChainConfig(cfg)
 	genesis.Timestamp = uint64(cfg.Chain.GenesisTime)
@@ -170,7 +170,7 @@ func TestExternalGenesisPreservesHeaderStateAndChainConfig(t *testing.T) {
 	}
 	if resolved.Chain.ChainID != 4242 || resolved.Chain.NetworkID != 0 || resolved.EffectiveNetworkID() != 4242 ||
 		resolved.Chain.GenesisTime != cfg.Chain.GenesisTime || resolved.Chain.GasLimit != genesis.GasLimit ||
-		resolved.Chain.Forks != (ForkConfig{CancunEpoch: 0, PragueEpoch: 1, OsakaEpoch: 2}) {
+		resolved.Chain.Forks != (ForkConfig{AmsterdamEpoch: -1, CancunEpoch: 0, PragueEpoch: 1, OsakaEpoch: 2}) {
 		t.Fatalf("resolved chain configuration = %#v", resolved.Chain)
 	}
 
@@ -524,8 +524,8 @@ func TestExternalGenesisValidationRejectsIncompatibleFiles(t *testing.T) {
 		{"missing Osaka", func(g *core.Genesis) { g.Config.OsakaTime = nil }, "activation times are required"},
 		{"post Osaka fork", func(g *core.Genesis) {
 			activation := *g.Config.OsakaTime
-			g.Config.AmsterdamTime = &activation
-		}, "post-Osaka"},
+			g.Config.BogotaTime = &activation
+		}, "outside the v0.1"},
 		{"blob schedule", func(g *core.Genesis) { g.Config.BlobScheduleConfig.Prague.Max++ }, "blobSchedule"},
 		{"missing system contract", func(g *core.Genesis) { delete(g.Alloc, params.BeaconRootsAddress) }, "missing EIP-4788"},
 		{"modified system contract", func(g *core.Genesis) {

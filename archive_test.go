@@ -111,30 +111,34 @@ func TestCloseDumpsStateAfterStoppingWrites(t *testing.T) {
 	}
 }
 
-func TestArchiveV1IsRejectedAndFailedLoadLeavesDestinationUntouched(t *testing.T) {
-	node, err := New(testConfig())
-	if err != nil {
-		t.Fatal(err)
-	}
-	database, err := encodeDatabase(node.chain.db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := node.Close(); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "v1.tar.zst")
-	if err := writeArchiveAtomic(path, StateManifest{Format: "ethertest-state-v1", ConsensusMode: "synthetic"}, database); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := InspectState(path); err == nil {
-		t.Fatal("v1 archive was accepted")
-	}
-	destination := filepath.Join(t.TempDir(), "destination")
-	if err := LoadState(path, destination); err == nil {
-		t.Fatal("v1 archive load was accepted")
-	}
-	if _, err := os.Stat(destination); !os.IsNotExist(err) {
-		t.Fatalf("failed load changed destination: %v", err)
+func TestOldArchivesAreRejectedAndFailedLoadLeavesDestinationUntouched(t *testing.T) {
+	for _, format := range []string{"ethertest-state-v1", "ethertest-state-v2"} {
+		t.Run(format, func(t *testing.T) {
+			node, err := New(testConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			database, err := encodeDatabase(node.chain.db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := node.Close(); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "v1.tar.zst")
+			if err := writeArchiveAtomic(path, StateManifest{Format: format, ConsensusMode: "synthetic"}, database); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := InspectState(path); err == nil {
+				t.Fatal("v1 archive was accepted")
+			}
+			destination := filepath.Join(t.TempDir(), "destination")
+			if err := LoadState(path, destination); err == nil {
+				t.Fatal("v1 archive load was accepted")
+			}
+			if _, err := os.Stat(destination); !os.IsNotExist(err) {
+				t.Fatalf("failed load changed destination: %v", err)
+			}
+		})
 	}
 }

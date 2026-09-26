@@ -7,8 +7,8 @@ explorers, indexers, and other off-chain applications that need realistic
 cross-layer behavior without P2P or a validator client.
 
 The current version is `0.1.0-alpha.1`. State format compatibility is not
-promised until `v0.1.0`. This tree uses metadata schema v2 and
-`ethertest-state-v2` archives. Schema-v1 databases and v1 archives are rejected
+promised until `v0.1.0`. This tree uses metadata schema v3 and
+`ethertest-state-v3` archives. Schema-v1/v2 databases and v1/v2 archives are rejected
 with an explicit rebuild error; there is no migration command.
 An unspecified `genesis_time` (`0`) is resolved once for a new generated chain
 and then read from the persisted timeline on later Pebble starts. An explicitly
@@ -29,9 +29,9 @@ Defaults:
 - chain/network ID: `1337` (matching `geth --dev`; `network_id = 0` inherits the chain ID)
 - 10 Anvil-compatible accounts with 10,000 ETH each in the generated default genesis
 - 6-second slots, 8 slots/epoch, 64 deterministic validators
-- Osaka/Fulu active at genesis
+- Amsterdam/Gloas active at genesis
 - synthetic safe/finalized checkpoints lagging one/two epochs
-- `consensusMode: synthetic`, Beacon API `v4-subset`, `fullConsensus: false`
+- `consensusMode: synthetic`, Beacon API `gloas-subset`, `fullConsensus: false`
 
 In human mode, a separate stderr banner prints development private keys. Keys
 are never included in structured logs, errors, metrics, or state archives.
@@ -51,7 +51,7 @@ Execution RPC is available at `http://127.0.0.1:8545` and Beacon REST/SSE uses
 the same listener, for example
 `http://127.0.0.1:8545/eth/v1/beacon/headers/head`.
 Fork-dependent blocks use
-`/eth/v2/beacon/blocks/{block_id}` and Fulu data columns use
+`/eth/v2/beacon/blocks/{block_id}` and Fulu/Gloas data columns use
 `/eth/v1/debug/beacon/data_column_sidecars/{block_id}`.
 `docker compose down` sends SIGTERM and allows the node to write
 `/state/ethertest-state.tar.zst` before exit. Use
@@ -90,9 +90,9 @@ The network surface currently includes:
 - Type-3 raw submission with mandatory KZG validation, Deneb JSON/SSZ sidecars,
   Osaka cell proofs, `packed-bytes-v1`, stable blob retrieval, and Fulu data
   columns.
-- Beacon API v4.0.0 subset for genesis/config/health, signed headers and blocks,
+- Beacon API Gloas subset (revision `a3f0654`) for genesis/config/health, signed headers and blocks,
   validators/balances,
-  Deneb→Electra/Fulu container transitions, synthetic finality, JSON/SSZ
+  Deneb→Electra/Fulu→Gloas container transitions, synthetic finality, JSON/SSZ
   negotiation, required-topic standard SSE replay, and structured errors.
 - `Node.PauseFinality`, `Node.ResumeFinality`, `Node.FinalityStatus`, and matching
   `ethertest_*` RPC controls for persistent synthetic finality fixtures.
@@ -110,7 +110,7 @@ The standard RPC registration baseline is
 [`ethereum/execution-apis@v1.0.0-beta.7`](https://github.com/ethereum/execution-apis/tree/v1.0.0-beta.7),
 commit `5aebdfdd45cadeb723be4bd45b4611b71c8b1c85`. The locked offline
 classification in `specs/upstream/execution-rpc-subset.json` contains all 78
-methods: 49 are implemented and 29 are deliberately unregistered. Existing
+methods: 51 are implemented and 27 are deliberately unregistered. Existing
 `web3`, `personal`, `miner`, subscription, and `ethertest`/`anvil`/`evm`
 extensions remain available but are not counted in that baseline.
 
@@ -121,7 +121,7 @@ extensions remain available but are not counted in that baseline.
 | `net_version`, `txpool_status`, `txpool_content`, `txpool_contentFrom`                                             | 4 implemented                                                                                    |
 | All 25 `engine_*` methods                                                                                          | Excluded until ethertest has a real authenticated EL/CL Engine API boundary                      |
 | `debug_getBadBlocks`, `testing_buildBlockV1`                                                                       | Excluded because v0.1 has no truthful sync bad-block pipeline or public upstream testing service |
-| `eth_getBlockAccessList`, `debug_getRawBlockAccessList`                                                            | Excluded until Amsterdam/EIP-7928 is supported                                                   |
+| `eth_getBlockAccessList`, `debug_getRawBlockAccessList`                                                            | Implemented for Amsterdam; earlier blocks return null                                                   |
 
 `safe` and `finalized` continue to be synthetic slot-derived tags. Configured
 development accounts and runtime-imported accounts are accepted by `eth_sign`,
@@ -141,6 +141,36 @@ duration. Its fixed v0.1 limits are 256 output blocks, 5,000 calls per
 block, 10,000 calls per request, 50,000,000 cumulative gas, and a five-second
 EVM timeout. Limit exhaustion returns `-38026`; timeout returns `-32016`.
 
+### Amsterdam and synthetic Gloas
+
+geth v1.17.6 supplies Amsterdam execution rules, including SLOTNUM, the new gas
+schedule, block access lists (BAL), and native builder deposit/exit requests.
+Generated genesis includes geth's canonical system contracts and deterministic
+factory. Configure `[chain.forks] amsterdam_epoch`, `ETHERTEST_AMSTERDAM_EPOCH`,
+or `--amsterdam-epoch`: `0` activates at genesis (default), a positive epoch
+activates at its exact first slot, and `-1` disables Amsterdam/Gloas. Activation
+cannot precede Osaka. Blob parameters remain fixed at this repository's preset.
+
+`eth_getBlockAccessList` and `debug_getRawBlockAccessList` expose the same
+validated BAL committed by the execution header, including pending candidates.
+Gloas blocks use deterministic self-build bids; the current payload, all five
+request types, and BAL live in a separately signed envelope. Parent requests
+appear in the next Gloas block. Builder requests have no injection control API.
+`GET /eth/v1/beacon/execution_payload_envelopes/{block_id}` supports JSON and
+SSZ with `Eth-Consensus-Version: gloas`. Gloas data columns use slot/root and
+bid commitments; Fulu retains its earlier container. KZG verification is mandatory.
+SSE adds versioned `head_v2` and `execution_payload_available`; legacy `head`
+keeps its existing response shape.
+
+These objects are synthetic projections, not a full Gloas state transition or
+builder network. No Engine API, P2P, validator client, or external builder is
+provided. Consensus types follow consensus-specs v1.7.0-beta.2 and the pinned
+Beacon API revision in `spec.lock`. Independent Python SSZ reference vectors
+cover progressive containers/lists; full upstream consensus/execution suites
+remain release gates. Schema v3 stores block and envelope together in the
+recovery journal and validates their references, signatures, and BAL on startup.
+Existing v1/v2 state requires a fresh chain; no migration is provided.
+
 ### Next-block withdrawals
 
 `ethertest_addWithdrawal` accepts one object with `validatorIndex`, `address`,
@@ -157,7 +187,8 @@ archives, or process restart.
 Every Prague-or-later block captures geth's native EIP-6110 deposit logs and
 EIP-7002/EIP-7251 system-contract queue output after its final transaction.
 Native typed bytes are validated strictly against the block `requestsHash`,
-then persisted with the Electra/Fulu Beacon projection. Native-only blocks keep
+then persisted with the Electra/Fulu projection or Gloas payload envelope.
+Amsterdam also captures native builder deposit and exit queues (types 3 and 4). Native-only blocks keep
 normal geth insertion and do not taint their history. The deposit log parser
 uses geth's configured `DepositContractAddress`; contract code at any other
 address is not treated as EIP-6110 output. With an imported execution genesis,
@@ -278,7 +309,7 @@ ethertest completion bash|zsh|fish
 
 `ethertest state dump` requires an effective Pebble `storage.path` (or
 `--data-dir`); it never silently creates and exports a fresh in-memory chain.
-`state load` verifies and stages the complete v2 archive before replacing an
+`state load` verifies and stages the complete v3 archive before replacing an
 empty destination.
 
 Configuration precedence is defaults, strict TOML, `ETHERTEST_*`, then CLI.
@@ -301,10 +332,12 @@ account balances into it. Configured mnemonic accounts remain unlocked signers,
 but an address omitted from `alloc` starts unfunded.
 
 Imported chains must be proof-of-stake, start at London/Shanghai/Cancun, schedule
-Prague and Osaka on exact ethertest epoch boundaries, retain the repository's
-pinned Cancun/Prague blob parameters, and leave post-Osaka forks disabled. The
+Prague, Osaka, and optional Amsterdam on exact ethertest epoch boundaries, retain the repository's
+pinned Cancun/Prague blob parameters, and leave later forks disabled. Missing
+`amsterdamTime` disables Amsterdam on imported chains. The
 fixed EIP-4788, EIP-2935, EIP-7002, and EIP-7251 system contract accounts must
-match geth's canonical initial code and state. Invalid files fail before the
+match geth's canonical initial code and state; Amsterdam chains must also include
+the canonical builder deposit/exit contracts and deterministic factory. Invalid files fail before the
 node starts and are never rewritten.
 
 `network_id = 0` inherits the effective execution chain ID; a nonzero
@@ -448,7 +481,7 @@ implemented in the locked execution API subset, plus HTTP batching, WebSocket
 `newHeads`, EIP-712, EIP-7702, common local-node controls, and canonical RPC
 errors. CI runs this as a separate blocking Ubuntu job.
 
-Upstream protocol inputs are pinned in `spec.lock`; the consumed minimal/Fulu
+Upstream protocol inputs are pinned in `spec.lock`; the consumed minimal/Gloas
 constants and API surface contracts are vendored under `specs/upstream`.
 
 ## Licensing

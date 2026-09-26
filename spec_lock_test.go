@@ -93,7 +93,7 @@ func TestExecutionAPIBeta7SubsetClassification(t *testing.T) {
 	if subset.Ref != "v1.0.0-beta.7" || subset.Commit != "5aebdfdd45cadeb723be4bd45b4611b71c8b1c85" {
 		t.Fatalf("execution API source = %s@%s", subset.Ref, subset.Commit)
 	}
-	if subset.TotalMethods != 78 || subset.ImplementedMethods != 49 || subset.ExcludedMethods != 29 || len(subset.Methods) != 78 {
+	if subset.TotalMethods != 78 || subset.ImplementedMethods != 51 || subset.ExcludedMethods != 27 || len(subset.Methods) != 78 {
 		t.Fatalf("execution API counts = total:%d implemented:%d excluded:%d list:%d", subset.TotalMethods, subset.ImplementedMethods, subset.ExcludedMethods, len(subset.Methods))
 	}
 	seen := make(map[string]struct{}, len(subset.Methods))
@@ -128,7 +128,7 @@ func TestExecutionAPIBeta7SubsetClassification(t *testing.T) {
 			t.Fatalf("method %s has unknown status %q", method.Name, method.Status)
 		}
 	}
-	if implemented != 49 || excluded != 29 {
+	if implemented != 51 || excluded != 27 {
 		t.Fatalf("classified methods = %d implemented, %d excluded", implemented, excluded)
 	}
 	if len(seen) != len(expectedStatus) {

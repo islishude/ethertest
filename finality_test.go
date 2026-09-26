@@ -219,82 +219,92 @@ func TestPausedFinalityGuardsBranchesAndClampsCanonicalRewinds(t *testing.T) {
 }
 
 func TestPausedFinalityPersistsAcrossPebbleAndStateArchive(t *testing.T) {
-	ctx := context.Background()
-	cfg := testConfig()
-	cfg.Mining.Mode = miningModeManual
-	cfg.Chain.SlotsPerEpoch = 2
-	cfg.Storage.Engine = "pebble"
-	cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
+	for _, activation := range []int64{-1, 0} {
+		name := "osaka"
+		if activation == 0 {
+			name = "amsterdam"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			cfg := testConfig()
+			cfg.Chain.Forks.AmsterdamEpoch = activation
+			cfg.Mining.Mode = miningModeManual
+			cfg.Chain.SlotsPerEpoch = 2
+			cfg.Storage.Engine = "pebble"
+			cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
 
-	first, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = first.Close() })
-	if err := first.Start(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := first.Mine(ctx, 6, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := first.PauseFinality(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := first.MissSlots(ctx, 3); err != nil {
-		t.Fatal(err)
-	}
-	assertFinalityStatus(t, first, true, 9, 6)
-	if err := first.Close(); err != nil {
-		t.Fatal(err)
-	}
+			first, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = first.Close() })
+			if err := first.Start(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := first.Mine(ctx, 6, true); err != nil {
+				t.Fatal(err)
+			}
+			if err := first.PauseFinality(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := first.MissSlots(ctx, 3); err != nil {
+				t.Fatal(err)
+			}
+			assertFinalityStatus(t, first, true, 9, 6)
+			if err := first.Close(); err != nil {
+				t.Fatal(err)
+			}
 
-	second, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = second.Close() })
-	assertFinalityStatus(t, second, true, 9, 6)
-	if err := second.Start(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := second.Mine(ctx, 1, true); err != nil {
-		t.Fatal(err)
-	}
-	assertFinalityStatus(t, second, true, 10, 6)
-	archive := filepath.Join(t.TempDir(), "paused-state.tar.zst")
-	if err := second.DumpState(archive); err != nil {
-		t.Fatal(err)
-	}
-	if err := second.Close(); err != nil {
-		t.Fatal(err)
-	}
+			second, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = second.Close() })
+			assertFinalityStatus(t, second, true, 9, 6)
+			if err := second.Start(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := second.Mine(ctx, 1, true); err != nil {
+				t.Fatal(err)
+			}
+			assertFinalityStatus(t, second, true, 10, 6)
+			archive := filepath.Join(t.TempDir(), "paused-state.tar.zst")
+			if err := second.DumpState(archive); err != nil {
+				t.Fatal(err)
+			}
+			if err := second.Close(); err != nil {
+				t.Fatal(err)
+			}
 
-	destination := filepath.Join(t.TempDir(), "loaded")
-	if err := LoadState(archive, destination); err != nil {
-		t.Fatal(err)
-	}
-	loadedConfig := cfg
-	loadedConfig.Storage.Path = destination
-	loaded, err := New(loadedConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = loaded.Close() })
-	assertFinalityStatus(t, loaded, true, 10, 6)
-	if err := loaded.Start(); err != nil {
-		t.Fatal(err)
-	}
-	revision := loaded.Revision()
-	if err := loaded.ResumeFinality(ctx); err != nil {
-		t.Fatal(err)
-	}
-	assertFinalityStatus(t, loaded, false, 10, 10)
-	events, err := loaded.EventsSince(revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 1 || events[0].Type != "finalized_checkpoint" {
-		t.Fatalf("loaded resume events = %#v", events)
+			destination := filepath.Join(t.TempDir(), "loaded")
+			if err := LoadState(archive, destination); err != nil {
+				t.Fatal(err)
+			}
+			loadedConfig := cfg
+			loadedConfig.Storage.Path = destination
+			loaded, err := New(loadedConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = loaded.Close() })
+			assertFinalityStatus(t, loaded, true, 10, 6)
+			if err := loaded.Start(); err != nil {
+				t.Fatal(err)
+			}
+			revision := loaded.Revision()
+			if err := loaded.ResumeFinality(ctx); err != nil {
+				t.Fatal(err)
+			}
+			assertFinalityStatus(t, loaded, false, 10, 10)
+			events, err := loaded.EventsSince(revision)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != 1 || events[0].Type != "finalized_checkpoint" {
+				t.Fatalf("loaded resume events = %#v", events)
+			}
+
+		})
 	}
 }
 

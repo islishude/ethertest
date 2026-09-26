@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 )
 
@@ -69,7 +70,9 @@ type candidateState struct {
 func newCandidateState(base ethdb.Database, root common.Hash) (*candidateState, *state.StateDB, error) {
 	store := newReadThroughStore(base)
 	db := rawdb.NewDatabase(store)
-	trieDB := triedb.NewDatabase(db, triedb.HashDefaults)
+	trieConfig := *triedb.HashDefaults
+	trieConfig.Preimages = true
+	trieDB := triedb.NewDatabase(db, &trieConfig)
 	stateDB := state.NewDatabase(trieDB, state.NewCodeDB(db))
 	statedb, err := state.New(root, stateDB)
 	if err != nil {
@@ -78,8 +81,8 @@ func newCandidateState(base ethdb.Database, root common.Hash) (*candidateState, 
 	return &candidateState{store: store, db: db, trie: trieDB, stateDB: stateDB}, statedb, nil
 }
 
-func (candidate *candidateState) commit(statedb *state.StateDB, number uint64, deleteEmpty, isCancun bool) (*state.StateDB, common.Hash, error) {
-	root, err := statedb.Commit(number, deleteEmpty, isCancun)
+func (candidate *candidateState) commit(statedb *state.StateDB, number uint64, rules params.Rules) (*state.StateDB, common.Hash, error) {
+	root, err := statedb.Commit(rules, number)
 	if err != nil {
 		return nil, common.Hash{}, err
 	}

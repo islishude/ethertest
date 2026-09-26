@@ -48,6 +48,7 @@ func commonFlags() []cli.Flag {
 		&cli.Uint64Flag{Name: "network-id", Usage: "network ID (0 inherits the effective chain ID)"},
 		&cli.StringFlag{Name: "genesis", Usage: "geth-compatible execution genesis.json"},
 		&cli.Int64Flag{Name: "genesis-time"},
+		&cli.Int64Flag{Name: "amsterdam-epoch", Usage: "Amsterdam/Gloas activation epoch (0 at genesis, -1 disables)"},
 		&cli.StringFlag{Name: "http", Usage: "shared HTTP+WS listen address"},
 		&cli.BoolFlag{Name: "no-http"},
 		&cli.StringFlag{Name: "ipc", Usage: "IPC socket or named-pipe path"},
@@ -81,6 +82,9 @@ func effectiveConfig(ctx *cli.Context) (ethertest.Config, error) {
 	}
 	if ctx.IsSet("network-id") {
 		cfg.Chain.NetworkID = ctx.Uint64("network-id")
+	}
+	if ctx.IsSet("amsterdam-epoch") {
+		cfg.Chain.Forks.AmsterdamEpoch = ctx.Int64("amsterdam-epoch")
 	}
 	if ctx.IsSet("genesis-time") {
 		cfg.Chain.GenesisTime = ctx.Int64("genesis-time")
@@ -219,19 +223,23 @@ func networkDescription(cfg ethertest.Config) map[string]any {
 	return map[string]any{
 		"chainId": cfg.Chain.ChainID, "networkId": cfg.EffectiveNetworkID(),
 		"genesisTime": cfg.Chain.GenesisTime, "gasLimit": cfg.Chain.GasLimit, "fork": fork,
-		"forkEpochs": map[string]uint64{
-			"cancun": cfg.Chain.Forks.CancunEpoch,
-			"prague": cfg.Chain.Forks.PragueEpoch,
-			"osaka":  cfg.Chain.Forks.OsakaEpoch,
+		"forkEpochs": map[string]any{
+			"amsterdam": cfg.Chain.Forks.AmsterdamEpoch,
+			"cancun":    cfg.Chain.Forks.CancunEpoch,
+			"prague":    cfg.Chain.Forks.PragueEpoch,
+			"osaka":     cfg.Chain.Forks.OsakaEpoch,
 		},
 		"genesisFile": cfg.Chain.GenesisFile,
 		"execution":   executionEndpoint, "consensus": beaconEndpoint, "ipc": ipcEndpoint,
 		"syntheticFinality": true, "consensusMode": "synthetic",
-		"beaconApi": "v4-subset", "fullConsensus": false, "releaseComplete": false,
+		"beaconApi": "gloas-subset", "fullConsensus": false, "releaseComplete": false,
 	}
 }
 
 func configuredFork(cfg ethertest.Config) string {
+	if cfg.Chain.Forks.AmsterdamEpoch == 0 {
+		return "gloas"
+	}
 	if cfg.Chain.Forks.OsakaEpoch == 0 {
 		return "fulu"
 	}
@@ -438,8 +446,8 @@ func capabilitiesCommand() *cli.Command {
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{
 			"version": ethertest.Version, "status": "alpha", "fork": configuredFork(cfg),
 			"syntheticFinality": true, "blobCodec": []string{"canonical-blob", "packed-bytes-v1"},
-			"consensusMode": "synthetic", "beaconApi": "v4-subset", "fullConsensus": false,
-			"forkTransitions": []string{"deneb", "electra", "fulu"},
+			"consensusMode": "synthetic", "beaconApi": "gloas-subset", "fullConsensus": false,
+			"forkTransitions": []string{"deneb", "electra", "fulu", "gloas"},
 			"ipc":             cfg.IPC.Enabled,
 			"releaseComplete": false,
 		})

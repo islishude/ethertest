@@ -13,6 +13,8 @@ gas_limit = 30000000
 cancun_epoch = 0
 prague_epoch = 0
 osaka_epoch = 0
+# 0 = genesis, positive = activation epoch, -1 = disabled
+amsterdam_epoch = 0
 
 [mining]
 mode = "transaction"

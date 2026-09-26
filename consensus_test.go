@@ -194,7 +194,7 @@ func TestDenebElectraFuluForkBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := node.chain.blockchain.Processor().Process(t.Context(), block, state, nil, vm.Config{}, nil)
+		result, err := node.chain.blockchain.Processor().Process(t.Context(), block, state, nil, nil, vm.Config{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

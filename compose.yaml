@@ -7,7 +7,10 @@ services:
       dockerfile: Dockerfile
     image: ethertest:local
     init: true
+    # Amsterdam/Gloas is the default; v1/v2 volumes require a fresh chain.
     command:
+      - --amsterdam-epoch
+      - "0"
       - --http
       - 0.0.0.0:8545
       - --allow-unsafe-external

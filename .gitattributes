@@ -7,3 +7,5 @@
 /testdata/vectors/c-kzg-4844-v2.1.5/verify_kzg_proof/correct_proof_0_0.yaml text eol=lf
 /testdata/vectors/consensus-spec-tests-v1.6.0-beta.0/beacon_block_header/case_0.json text eol=lf
 /testdata/vectors/execution-spec-tests-eip4788/timestamp_sequences.json text eol=lf
+/testdata/vectors/gloas/generate.py text eol=lf
+/testdata/vectors/gloas/vectors.json text eol=lf

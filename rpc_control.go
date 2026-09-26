@@ -15,8 +15,8 @@ func (api *controlAPI) Capabilities() map[string]any {
 		"authorizationSigning":     true,
 		"executionRequests":        true,
 		"executionRequestControls": true,
-		"consensusMode":            "synthetic", "beaconApi": "v4-subset", "fullConsensus": false,
-		"forkTransitions": []string{"deneb", "electra", "fulu"},
+		"consensusMode":            "synthetic", "beaconApi": "gloas-subset", "fullConsensus": false,
+		"forkTransitions": []string{"deneb", "electra", "fulu", "gloas"},
 		"blobCodecs":      []string{"canonical-blob", "packed-bytes-v1"},
 		"p2p":             false, "engineAPI": false, "javascriptTracers": false,
 		"ipc":             api.node.ipcEndpoint != "",
@@ -82,7 +82,7 @@ func (api *controlAPI) NetworkConfig() map[string]any {
 		"slotDuration":  api.node.cfg.Chain.SlotDuration.String(),
 		"slotsPerEpoch": api.node.cfg.Chain.SlotsPerEpoch,
 		"el":            endpoints.Execution, "beacon": endpoints.Beacon, "ipc": endpoints.IPC,
-		"consensusMode": "synthetic", "beaconApi": "v4-subset",
+		"consensusMode": "synthetic", "beaconApi": "gloas-subset",
 		"fullConsensus": false, "releaseComplete": false,
 	}
 }

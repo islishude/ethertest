@@ -25,7 +25,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-const StateArchiveFormat = "ethertest-state-v2"
+const StateArchiveFormat = "ethertest-state-v3"
 
 type StateManifest struct {
 	Format           string   `json:"format"`
@@ -496,7 +496,7 @@ func validateArchiveDatabase(db ethdb.Database, manifest StateManifest) error {
 	}
 	version, err := db.Get(stateSchemaKey)
 	if err != nil || len(version) != 8 || binary.BigEndian.Uint64(version) != currentMetadataFormat {
-		return errors.New("archive database does not contain metadata schema v2")
+		return errors.New("archive database does not contain metadata schema v3")
 	}
 	genesisHash := rawdb.ReadCanonicalHash(db, 0)
 	if genesisHash == (common.Hash{}) || rawdb.ReadBlock(db, genesisHash, 0) == nil || genesisHash.Hex() != manifest.GenesisHash {

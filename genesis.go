@@ -138,14 +138,14 @@ func validateExecutionGenesis(cfg Config, genesis *core.Genesis) (ForkConfig, er
 	if chainConfig.EnableUBTAtGenesis || chainConfig.UBTTime != nil ||
 		chainConfig.BPO1Time != nil || chainConfig.BPO2Time != nil ||
 		chainConfig.BPO3Time != nil || chainConfig.BPO4Time != nil ||
-		chainConfig.BPO5Time != nil || chainConfig.AmsterdamTime != nil ||
+		chainConfig.BPO5Time != nil ||
 		chainConfig.BogotaTime != nil {
-		return ForkConfig{}, errors.New("post-Osaka forks are outside the v0.1 protocol surface")
+		return ForkConfig{}, errors.New("BPO, Bogota and UBT forks are outside the v0.1 protocol surface")
 	}
 	if !matchesRepositoryBlobSchedule(chainConfig.BlobScheduleConfig) {
 		return ForkConfig{}, errors.New("blobSchedule must match ethertest's pinned Cancun and Prague parameters")
 	}
-	if err := validateGenesisSystemContracts(genesis.Alloc); err != nil {
+	if err := validateGenesisSystemContracts(genesis.Alloc, chainConfig.AmsterdamTime != nil); err != nil {
 		return ForkConfig{}, err
 	}
 
@@ -161,7 +161,26 @@ func validateExecutionGenesis(cfg Config, genesis *core.Genesis) (ForkConfig, er
 	if err != nil {
 		return ForkConfig{}, err
 	}
-	forks := ForkConfig{CancunEpoch: cancunEpoch, PragueEpoch: pragueEpoch, OsakaEpoch: osakaEpoch}
+	amsterdamEpoch := int64(-1)
+	if chainConfig.AmsterdamTime != nil {
+		epoch, err := executionForkEpoch("Amsterdam", genesis.Timestamp, *chainConfig.AmsterdamTime, cfg)
+		if err != nil {
+			return ForkConfig{}, err
+		}
+		if epoch > math.MaxInt64 || epoch < osakaEpoch {
+			return ForkConfig{}, errors.New("invalid Amsterdam epoch")
+		}
+		amsterdamEpoch = int64(epoch)
+		if genesis.SlotNumber != nil && amsterdamEpoch != 0 {
+			return ForkConfig{}, errors.New("slotNumber requires Amsterdam at genesis")
+		}
+		if genesis.SlotNumber != nil && *genesis.SlotNumber != 0 {
+			return ForkConfig{}, errors.New("genesis slotNumber must be zero")
+		}
+	} else if genesis.SlotNumber != nil {
+		return ForkConfig{}, errors.New("slotNumber requires Amsterdam at genesis")
+	}
+	forks := ForkConfig{AmsterdamEpoch: amsterdamEpoch, CancunEpoch: cancunEpoch, PragueEpoch: pragueEpoch, OsakaEpoch: osakaEpoch}
 	if forks.CancunEpoch != 0 || forks.CancunEpoch > forks.PragueEpoch || forks.PragueEpoch > forks.OsakaEpoch {
 		return ForkConfig{}, errors.New("fork epochs must satisfy Cancun = 0 <= Prague <= Osaka")
 	}
@@ -234,17 +253,22 @@ func matchesRepositoryBlobSchedule(schedule *params.BlobScheduleConfig) bool {
 		schedule.BPO2 == nil && schedule.BPO3 == nil && schedule.BPO4 == nil && schedule.BPO5 == nil
 }
 
-func validateGenesisSystemContracts(alloc types.GenesisAlloc) error {
-	for _, contract := range []struct {
+func validateGenesisSystemContracts(alloc types.GenesisAlloc, amsterdam bool) error {
+	type systemContract struct {
 		name    string
 		address common.Address
 		code    []byte
-	}{
+	}
+	contracts := []systemContract{
 		{"EIP-4788 beacon roots", params.BeaconRootsAddress, params.BeaconRootsCode},
 		{"EIP-2935 history storage", params.HistoryStorageAddress, params.HistoryStorageCode},
 		{"EIP-7002 withdrawal queue", params.WithdrawalQueueAddress, params.WithdrawalQueueCode},
 		{"EIP-7251 consolidation queue", params.ConsolidationQueueAddress, params.ConsolidationQueueCode},
-	} {
+	}
+	if amsterdam {
+		contracts = append(contracts, systemContract{"builder deposit", params.BuilderDepositAddress, params.BuilderDepositCode}, systemContract{"builder exit", params.BuilderExitAddress, params.BuilderExitCode}, systemContract{"deterministic factory", params.DeterministicFactoryAddress, params.DeterministicFactoryCode})
+	}
+	for _, contract := range contracts {
 		account, exists := alloc[contract.address]
 		if !exists {
 			return fmt.Errorf("missing %s system contract at %s", contract.name, contract.address)

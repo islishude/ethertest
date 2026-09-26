@@ -41,6 +41,7 @@ func (n *Node) beaconHandler() http.Handler {
 	mux.HandleFunc("GET /eth/v1/config/fork_schedule", n.beaconForkSchedule)
 	mux.HandleFunc("GET /eth/v1/beacon/headers/{block_id}", n.beaconHeader)
 	mux.HandleFunc("GET /eth/v2/beacon/blocks/{block_id}", n.beaconBlock)
+	mux.HandleFunc("GET /eth/v1/beacon/execution_payload_envelopes/{block_id}", n.beaconPayloadEnvelope)
 	mux.HandleFunc("GET /eth/v1/beacon/states/{state_id}/validators", n.beaconValidators)
 	mux.HandleFunc("GET /eth/v1/beacon/states/{state_id}/validator_balances", n.beaconValidatorBalances)
 	mux.HandleFunc("GET /eth/v1/beacon/states/{state_id}/finality_checkpoints", n.beaconFinalityCheckpoints)
@@ -169,22 +170,35 @@ func (n *Node) beaconGenesis(w http.ResponseWriter, _ *http.Request) {
 
 func (n *Node) beaconSpec(w http.ResponseWriter, _ *http.Request) {
 	writeBeacon(w, http.StatusOK, map[string]string{
-		"CONFIG_NAME":                        "ethertest-minimal",
-		"PRESET_BASE":                        "minimal",
-		"SECONDS_PER_SLOT":                   strconv.FormatUint(uint64(n.cfg.Chain.SlotDuration/time.Second), 10),
-		"SLOTS_PER_EPOCH":                    strconv.FormatUint(n.cfg.Chain.SlotsPerEpoch, 10),
-		"MIN_GENESIS_ACTIVE_VALIDATOR_COUNT": strconv.FormatUint(n.cfg.Chain.Validators, 10),
-		"DEPOSIT_CHAIN_ID":                   strconv.FormatUint(n.cfg.Chain.ChainID, 10),
-		"DEPOSIT_NETWORK_ID":                 strconv.FormatUint(n.cfg.Chain.NetworkID, 10),
+		"CONFIG_NAME":                              "ethertest-minimal",
+		"GLOAS_FORK_VERSION":                       "0x07000000",
+		"GLOAS_FORK_EPOCH":                         n.gloasForkEpoch(),
+		"SYNC_COMMITTEE_SIZE":                      "512",
+		"MAX_COMMITTEES_PER_SLOT":                  "64",
+		"PTC_SIZE":                                 "16",
+		"MAX_PAYLOAD_ATTESTATIONS":                 "4",
+		"MAX_BUILDER_DEPOSIT_REQUESTS_PER_PAYLOAD": "64",
+		"MAX_BUILDER_EXIT_REQUESTS_PER_PAYLOAD":    "16",
+		"DOMAIN_BEACON_BUILDER":                    "0x0b000000",
+		"PRESET_BASE":                              "minimal",
+		"SECONDS_PER_SLOT":                         strconv.FormatUint(uint64(n.cfg.Chain.SlotDuration/time.Second), 10),
+		"SLOTS_PER_EPOCH":                          strconv.FormatUint(n.cfg.Chain.SlotsPerEpoch, 10),
+		"MIN_GENESIS_ACTIVE_VALIDATOR_COUNT":       strconv.FormatUint(n.cfg.Chain.Validators, 10),
+		"DEPOSIT_CHAIN_ID":                         strconv.FormatUint(n.cfg.Chain.ChainID, 10),
+		"DEPOSIT_NETWORK_ID":                       strconv.FormatUint(n.cfg.Chain.NetworkID, 10),
 	})
 }
 
 func (n *Node) beaconForkSchedule(w http.ResponseWriter, _ *http.Request) {
-	writeBeacon(w, http.StatusOK, []map[string]string{
+	schedule := []map[string]string{
 		{"previous_version": "0x03000000", "current_version": "0x04000000", "epoch": strconv.FormatUint(n.cfg.Chain.Forks.CancunEpoch, 10)},
 		{"previous_version": "0x04000000", "current_version": "0x05000000", "epoch": strconv.FormatUint(n.cfg.Chain.Forks.PragueEpoch, 10)},
 		{"previous_version": "0x05000000", "current_version": "0x06000000", "epoch": strconv.FormatUint(n.cfg.Chain.Forks.OsakaEpoch, 10)},
-	})
+	}
+	if n.cfg.Chain.Forks.AmsterdamEpoch >= 0 {
+		schedule = append(schedule, map[string]string{"previous_version": "0x06000000", "current_version": "0x07000000", "epoch": n.gloasForkEpoch()})
+	}
+	writeBeacon(w, http.StatusOK, schedule)
 }
 
 func (n *Node) beaconHeader(w http.ResponseWriter, r *http.Request) {
@@ -428,6 +442,11 @@ func (n *Node) beaconBlobSidecars(w http.ResponseWriter, r *http.Request) {
 		writeBeaconError(w, beaconBlockIDStatus(err), err)
 		return
 	}
+	if n.consensus.forkName(n.chain.slotOf(block)) == "gloas" {
+		writeBeaconError(w, http.StatusNotFound, errors.New("gloas blobs use data column sidecars"))
+		return
+	}
+
 	ssz, err := beaconWantsSSZ(r)
 	if err != nil {
 		writeBeaconError(w, http.StatusNotAcceptable, err)
@@ -508,7 +527,8 @@ func (n *Node) beaconDataColumns(w http.ResponseWriter, r *http.Request) {
 		writeBeaconError(w, beaconBlockIDStatus(err), err)
 		return
 	}
-	if n.consensus.forkName(n.chain.slotOf(block)) != "fulu" {
+	fork := n.consensus.forkName(n.chain.slotOf(block))
+	if fork != "fulu" && fork != "gloas" {
 		writeBeaconError(w, http.StatusNotFound, errors.New("data column sidecars are unavailable before Fulu"))
 		return
 	}
@@ -543,6 +563,27 @@ func (n *Node) beaconDataColumns(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	projection, err := n.consensus.signedBlock(n.chain, block)
+	if err != nil {
+		writeBeaconError(w, http.StatusInternalServerError, err)
+		return
+	}
+	commitments := projection.commitments()
+	if len(commitments) != len(blobs) {
+		writeBeaconError(w, http.StatusInternalServerError, errors.New("data columns disagree with Beacon commitments"))
+		return
+	}
+	for i := range blobs {
+		if commitments[i] != deneb.KZGCommitment(blobs[i].commitment) {
+			writeBeaconError(w, http.StatusInternalServerError, errors.New("data column commitment mismatch"))
+			return
+		}
+	}
+	beaconRoot, err := projection.messageRoot()
+	if err != nil {
+		writeBeaconError(w, http.StatusInternalServerError, err)
+		return
+	}
 	if len(blobs) == 0 {
 		if ssz {
 			setSyntheticConsensusHeaders(w)
@@ -571,7 +612,10 @@ func (n *Node) beaconDataColumns(w http.ResponseWriter, r *http.Request) {
 	}
 	columns := make([]map[string]any, 0, kzg4844.CellProofsPerBlob)
 	encodedColumns := make([][]byte, 0, kzg4844.CellProofsPerBlob)
-	inclusionProof, err := n.consensus.kzgCommitmentsInclusionProof(n.chain, block)
+	var inclusionProof [4][32]byte
+	if fork == "fulu" {
+		inclusionProof, err = n.consensus.kzgCommitmentsInclusionProof(n.chain, block)
+	}
 	if err != nil {
 		writeBeaconError(w, http.StatusInternalServerError, err)
 		return
@@ -603,12 +647,12 @@ func (n *Node) beaconDataColumns(w http.ResponseWriter, r *http.Request) {
 			commitments[blobIndex] = hexutil.Encode(blobs[blobIndex].commitment[:])
 			proofs[blobIndex] = hexutil.Encode(blobs[blobIndex].proofs[column][:])
 		}
-		columns = append(columns, map[string]any{
+		columnJSON := map[string]any{
 			"index": strconv.Itoa(column), "column": columnCells,
 			"kzg_commitments": commitments, "kzg_proofs": proofs,
 			"signed_block_header":             signedHeader,
 			"kzg_commitments_inclusion_proof": inclusionJSON,
-		})
+		}
 		columnValues := make([]kzg4844.Cell, len(blobs))
 		commitmentValues := make([]kzg4844.Commitment, len(blobs))
 		proofValues := make([]kzg4844.Proof, len(blobs))
@@ -617,13 +661,27 @@ func (n *Node) beaconDataColumns(w http.ResponseWriter, r *http.Request) {
 			commitmentValues[blobIndex] = blobs[blobIndex].commitment
 			proofValues[blobIndex] = blobs[blobIndex].proofs[column]
 		}
-		encoded, err := marshalDataColumnSSZ(
-			uint64(column), columnValues, commitmentValues, proofValues, headerSSZ, inclusionProof,
-		)
-		if err != nil {
-			writeBeaconError(w, http.StatusInternalServerError, err)
-			return
+		var encoded []byte
+		if fork == "gloas" {
+			columnJSON = map[string]any{"index": strconv.Itoa(column), "column": columnCells, "kzg_proofs": proofs, "slot": strconv.FormatUint(n.chain.slotOf(block), 10), "beacon_block_root": beaconRoot}
+			value := gloasDataColumn{Index: uint64(column), Slot: phase0.Slot(n.chain.slotOf(block)), BeaconBlockRoot: beaconRoot, Column: make([][2048]byte, len(blobs)), KZGProofs: make([]deneb.KZGProof, len(blobs))}
+			for i := range blobs {
+				value.Column[i] = columnValues[i]
+				value.KZGProofs[i] = deneb.KZGProof(proofValues[i])
+			}
+			encoded, err = gloasSSZ.MarshalSSZ(&value)
+			if err != nil {
+				writeBeaconError(w, 500, err)
+				return
+			}
+		} else {
+			encoded, err = marshalDataColumnSSZ(uint64(column), columnValues, commitmentValues, proofValues, headerSSZ, inclusionProof)
+			if err != nil {
+				writeBeaconError(w, http.StatusInternalServerError, err)
+				return
+			}
 		}
+		columns = append(columns, columnJSON)
 		encodedColumns = append(encodedColumns, encoded)
 	}
 	if ssz {
@@ -877,6 +935,38 @@ func (n *Node) beaconEventMessages(event Event, topics map[string]bool) []beacon
 				"execution_optimistic":         optimistic,
 			}})
 		}
+		if n.consensus.forkName(event.Slot) == "gloas" && topics["execution_payload_available"] {
+			messages = append(messages, beaconEventMessage{topic: "execution_payload_available", ordinal: 4, data: map[string]any{"slot": strconv.FormatUint(event.Slot, 10), "block_root": common.Hash(root).Hex()}})
+		}
+		if topics["head_v2"] {
+			header, err := n.consensus.signedHeader(n.chain, block)
+			if err != nil {
+				return messages
+			}
+			epoch := event.Slot / n.cfg.Chain.SlotsPerEpoch
+			currentSlot, nextSlot := uint64(0), uint64(0)
+			if epoch > 1 {
+				currentSlot = (epoch-1)*n.cfg.Chain.SlotsPerEpoch - 1
+			}
+			if epoch > 0 {
+				nextSlot = epoch*n.cfg.Chain.SlotsPerEpoch - 1
+			}
+			currentRoot, currentErr := n.beaconAncestorRootAtSlot(block, currentSlot)
+			nextRoot, nextErr := n.beaconAncestorRootAtSlot(block, nextSlot)
+			if currentErr != nil || nextErr != nil {
+				return messages
+			}
+			data := map[string]any{
+				"slot": strconv.FormatUint(event.Slot, 10), "block": common.Hash(root).Hex(),
+				"state":                common.Hash(header.Message.StateRoot).Hex(),
+				"epoch_transition":     event.Slot%n.cfg.Chain.SlotsPerEpoch == 0,
+				"execution_optimistic": optimistic, "payload_status": "full",
+				"current_epoch_dependent_root": common.Hash(currentRoot).Hex(),
+				"next_epoch_dependent_root":    common.Hash(nextRoot).Hex(),
+			}
+			messages = append(messages, beaconEventMessage{topic: "head_v2", ordinal: 5, data: map[string]any{"version": n.consensus.forkName(event.Slot), "data": data}})
+		}
+
 	case "chain_reorg":
 		if !topics["chain_reorg"] {
 			return nil
@@ -973,6 +1063,21 @@ func (n *Node) beaconBlockID(id string) (*types.Block, error) {
 		}
 		return block, nil
 	}
+}
+
+// Resolve against the event block's ancestry so replay remains stable after a
+// reorg. Missed slots use the latest ancestor at or before the requested slot.
+func (n *Node) beaconAncestorRootAtSlot(block *types.Block, slot uint64) (phase0.Root, error) {
+	for block != nil {
+		if n.chain.slotOf(block) <= slot {
+			return n.beaconRoot(block)
+		}
+		if block.NumberU64() == 0 {
+			break
+		}
+		block = n.chain.blockchain.GetBlock(block.ParentHash(), block.NumberU64()-1)
+	}
+	return phase0.Root{}, errors.New("beacon dependency ancestor is missing")
 }
 
 func (n *Node) beaconRoot(block *types.Block) (phase0.Root, error) {

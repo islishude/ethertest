@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"path/filepath"
 	"strings"
@@ -92,11 +93,11 @@ func TestExecutionBlocksReferencePersistedParentBeaconProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := core.NewStateProcessor(node.chain.blockchain).Process(
-		context.Background(), block, replayState, nil, vm.Config{}, nil,
+		context.Background(), block, replayState, nil, nil, vm.Config{}, nil,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if replayed := replayState.IntermediateRoot(true); replayed != block.Root() {
+	if replayed := replayState.IntermediateRoot(node.chain.config.Rules(block.Number(), true, block.Time())); replayed != block.Root() {
 		t.Fatalf("clean execution replay root = %s, want %s", replayed, block.Root())
 	}
 
@@ -118,96 +119,106 @@ func TestExecutionBlocksReferencePersistedParentBeaconProjection(t *testing.T) {
 }
 
 func TestControlLineageAndArchiveSafetyArePermanent(t *testing.T) {
-	cfg := testConfig()
-	cfg.Mining.Mode = miningModeManual
-	node, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := node.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer node.Close() //nolint:errcheck
-
-	if err := node.CreateBranch(context.Background(), "clean", 0); err != nil {
-		t.Fatal(err)
-	}
-	cleanHashes, err := node.MineBranch(context.Background(), "clean", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := node.Accounts()[0]
-	balance := big.NewInt(123)
-	controlHash, err := node.ApplyControl(context.Background(), ControlChanges{address: {Balance: balance}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok, err := node.VerifyControlRecord(context.Background(), controlHash); err != nil || !ok {
-		t.Fatalf("VerifyControlRecord = %v, %v", ok, err)
-	}
-	descendants, err := node.Mine(context.Background(), 1, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, hash := range []common.Hash{controlHash, descendants[0]} {
-		safety, err := node.BlockSafety(hash)
-		if err != nil || !safety.Tainted || safety.FirstUnsafeBlock == nil || *safety.FirstUnsafeBlock != controlHash {
-			t.Fatalf("block safety for %s = %#v, %v", hash, safety, err)
+	for _, activation := range []int64{-1, 0} {
+		name := "osaka"
+		if activation == 0 {
+			name = "amsterdam"
 		}
-	}
-	cleanSafety, err := node.BlockSafety(cleanHashes[0])
-	if err != nil || cleanSafety.Tainted {
-		t.Fatalf("clean branch safety = %#v, %v", cleanSafety, err)
-	}
+		t.Run(name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Chain.Forks.AmsterdamEpoch = activation
+			cfg.Mining.Mode = miningModeManual
+			node, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := node.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer node.Close() //nolint:errcheck
 
-	control := node.chain.blockchain.GetBlockByHash(controlHash)
-	parent := node.chain.blockchain.GetBlockByHash(control.ParentHash())
-	parentState, err := node.chain.blockchain.StateAt(parent.Header())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := core.NewStateProcessor(node.chain.blockchain).Process(
-		context.Background(), control, parentState, nil, vm.Config{}, nil,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if replayed := parentState.IntermediateRoot(true); replayed == control.Root() {
-		t.Fatal("unsafe control block unexpectedly matches a standard state transition")
-	}
+			if err := node.CreateBranch(context.Background(), "clean", 0); err != nil {
+				t.Fatal(err)
+			}
+			cleanHashes, err := node.MineBranch(context.Background(), "clean", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			address := node.Accounts()[0]
+			balance := big.NewInt(123)
+			controlHash, err := node.ApplyControl(context.Background(), ControlChanges{address: {Balance: balance}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := node.VerifyControlRecord(context.Background(), controlHash); err != nil || !ok {
+				t.Fatalf("VerifyControlRecord = %v, %v", ok, err)
+			}
+			descendants, err := node.Mine(context.Background(), 1, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, hash := range []common.Hash{controlHash, descendants[0]} {
+				safety, err := node.BlockSafety(hash)
+				if err != nil || !safety.Tainted || safety.FirstUnsafeBlock == nil || *safety.FirstUnsafeBlock != controlHash {
+					t.Fatalf("block safety for %s = %#v, %v", hash, safety, err)
+				}
+			}
+			cleanSafety, err := node.BlockSafety(cleanHashes[0])
+			if err != nil || cleanSafety.Tainted {
+				t.Fatalf("clean branch safety = %#v, %v", cleanSafety, err)
+			}
 
-	if err := node.Checkpoint(context.Background(), "unsafe"); err != nil {
-		t.Fatal(err)
-	}
-	if point := node.checkpoints["unsafe"]; point == nil || !point.tainted || point.slot != 2 {
-		t.Fatalf("unsafe checkpoint metadata = %#v", point)
-	}
-	if err := node.SwitchBranch(context.Background(), "clean"); err != nil {
-		t.Fatal(err)
-	}
-	status := node.SafetyStatus()
-	if !status.SessionTainted || status.HeadTainted || status.FirstUnsafeBlock == nil || *status.FirstUnsafeBlock != controlHash || status.ConsensusMode != "synthetic" {
-		t.Fatalf("safety after clean reorg = %#v", status)
-	}
-	client := node.RPCClient()
-	defer client.Close()
-	var rpcStatus SafetyStatus
-	if err := client.Call(&rpcStatus, "ethertest_safetyStatus"); err != nil || !rpcStatus.SessionTainted || rpcStatus.HeadTainted {
-		t.Fatalf("ethertest_safetyStatus = %#v, %v", rpcStatus, err)
-	}
-	var rpcBlockSafety BlockSafety
-	if err := client.Call(&rpcBlockSafety, "ethertest_blockSafety", controlHash); err != nil || !rpcBlockSafety.Tainted {
-		t.Fatalf("ethertest_blockSafety = %#v, %v", rpcBlockSafety, err)
-	}
-	archive := filepath.Join(t.TempDir(), "state.tar.zst")
-	if err := node.DumpState(archive); err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := InspectState(archive)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !manifest.Tainted || manifest.HeadTainted || !manifest.TimelineComplete || manifest.ConsensusMode != "synthetic" || len(manifest.TaintReasons) == 0 {
-		t.Fatalf("unsafe archive manifest = %#v", manifest)
+			control := node.chain.blockchain.GetBlockByHash(controlHash)
+			parent := node.chain.blockchain.GetBlockByHash(control.ParentHash())
+			parentState, err := node.chain.blockchain.StateAt(parent.Header())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := core.NewStateProcessor(node.chain.blockchain).Process(
+				context.Background(), control, parentState, nil, nil, vm.Config{DisableParallelExecution: true}, nil,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if replayed := parentState.IntermediateRoot(node.chain.config.Rules(control.Number(), true, control.Time())); replayed == control.Root() {
+				t.Fatal("unsafe control block unexpectedly matches a standard state transition")
+			}
+
+			if err := node.Checkpoint(context.Background(), "unsafe"); err != nil {
+				t.Fatal(err)
+			}
+			if point := node.checkpoints["unsafe"]; point == nil || !point.tainted || point.slot != 2 {
+				t.Fatalf("unsafe checkpoint metadata = %#v", point)
+			}
+			if err := node.SwitchBranch(context.Background(), "clean"); err != nil {
+				t.Fatal(err)
+			}
+			status := node.SafetyStatus()
+			if !status.SessionTainted || status.HeadTainted || status.FirstUnsafeBlock == nil || *status.FirstUnsafeBlock != controlHash || status.ConsensusMode != "synthetic" {
+				t.Fatalf("safety after clean reorg = %#v", status)
+			}
+			client := node.RPCClient()
+			defer client.Close()
+			var rpcStatus SafetyStatus
+			if err := client.Call(&rpcStatus, "ethertest_safetyStatus"); err != nil || !rpcStatus.SessionTainted || rpcStatus.HeadTainted {
+				t.Fatalf("ethertest_safetyStatus = %#v, %v", rpcStatus, err)
+			}
+			var rpcBlockSafety BlockSafety
+			if err := client.Call(&rpcBlockSafety, "ethertest_blockSafety", controlHash); err != nil || !rpcBlockSafety.Tainted {
+				t.Fatalf("ethertest_blockSafety = %#v, %v", rpcBlockSafety, err)
+			}
+			archive := filepath.Join(t.TempDir(), "state.tar.zst")
+			if err := node.DumpState(archive); err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := InspectState(archive)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !manifest.Tainted || manifest.HeadTainted || !manifest.TimelineComplete || manifest.ConsensusMode != "synthetic" || len(manifest.TaintReasons) == 0 {
+				t.Fatalf("unsafe archive manifest = %#v", manifest)
+			}
+
+		})
 	}
 }
 
@@ -241,49 +252,59 @@ func TestSafetyQueriesFailClosedWhenMetadataIsUnavailable(t *testing.T) {
 }
 
 func TestPebbleRetainsMissedTailAndCheckpointSlot(t *testing.T) {
-	cfg := testConfig()
-	cfg.Mining.Mode = miningModeManual
-	cfg.Storage.Engine = "pebble"
-	cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
-	first, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := first.Start(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := first.Mine(context.Background(), 1, true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := first.MissSlots(context.Background(), 3); err != nil {
-		t.Fatal(err)
-	}
-	if err := first.Checkpoint(context.Background(), "tail"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := first.Mine(context.Background(), 1, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatal(err)
-	}
+	for _, activation := range []int64{-1, 0} {
+		name := "osaka"
+		if activation == 0 {
+			name = "amsterdam"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Chain.Forks.AmsterdamEpoch = activation
+			cfg.Mining.Mode = miningModeManual
+			cfg.Storage.Engine = "pebble"
+			cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
+			first, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := first.Start(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := first.Mine(context.Background(), 1, true); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := first.MissSlots(context.Background(), 3); err != nil {
+				t.Fatal(err)
+			}
+			if err := first.Checkpoint(context.Background(), "tail"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := first.Mine(context.Background(), 1, true); err != nil {
+				t.Fatal(err)
+			}
+			if err := first.Close(); err != nil {
+				t.Fatal(err)
+			}
 
-	second, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if second.chain.currentSlot() != 5 {
-		t.Fatalf("restart slot = %d, want 5", second.chain.currentSlot())
-	}
-	if err := second.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer second.Close() //nolint:errcheck
-	if err := second.Restore(context.Background(), "tail"); err != nil {
-		t.Fatal(err)
-	}
-	if second.chain.currentSlot() != 4 || second.chain.blockchain.CurrentBlock().Number.Uint64() != 1 {
-		t.Fatalf("restored slot/head = %d/%d, want 4/1", second.chain.currentSlot(), second.chain.blockchain.CurrentBlock().Number.Uint64())
+			second, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if second.chain.currentSlot() != 5 {
+				t.Fatalf("restart slot = %d, want 5", second.chain.currentSlot())
+			}
+			if err := second.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer second.Close() //nolint:errcheck
+			if err := second.Restore(context.Background(), "tail"); err != nil {
+				t.Fatal(err)
+			}
+			if second.chain.currentSlot() != 4 || second.chain.blockchain.CurrentBlock().Number.Uint64() != 1 {
+				t.Fatalf("restored slot/head = %d/%d, want 4/1", second.chain.currentSlot(), second.chain.blockchain.CurrentBlock().Number.Uint64())
+			}
+
+		})
 	}
 }
 
@@ -416,55 +437,65 @@ func TestBranchSwitchCannotReplaceSyntheticFinalizedHistory(t *testing.T) {
 }
 
 func TestRecoveryJournalBoundaries(t *testing.T) {
-	for _, test := range []struct {
-		name         string
-		stage        commitStage
-		wantHead     uint64
-		wantRevision Revision
-	}{
-		{name: "prepared", stage: commitStagePrepared, wantHead: 0, wantRevision: 0},
-		{name: "execution", stage: commitStageExecution, wantHead: 1, wantRevision: 1},
-		{name: "auxiliary", stage: commitStageAuxiliary, wantHead: 1, wantRevision: 1},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			cfg := testConfig()
-			cfg.Mining.Mode = miningModeManual
-			cfg.Storage.Engine = "pebble"
-			cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
-			first, err := New(cfg)
-			if err != nil {
-				t.Fatal(err)
+	for _, activation := range []int64{-1, 0} {
+		name := "osaka"
+		if activation == 0 {
+			name = "amsterdam"
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, test := range []struct {
+				name         string
+				stage        commitStage
+				wantHead     uint64
+				wantRevision Revision
+			}{
+				{name: "prepared", stage: commitStagePrepared, wantHead: 0, wantRevision: 0},
+				{name: "execution", stage: commitStageExecution, wantHead: 1, wantRevision: 1},
+				{name: "auxiliary", stage: commitStageAuxiliary, wantHead: 1, wantRevision: 1},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					cfg := testConfig()
+					cfg.Chain.Forks.AmsterdamEpoch = activation
+					cfg.Mining.Mode = miningModeManual
+					cfg.Storage.Engine = "pebble"
+					cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
+					first, err := New(cfg)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := first.Start(); err != nil {
+						t.Fatal(err)
+					}
+					first.commitHook = func(stage commitStage) error {
+						if stage == test.stage {
+							return errors.New("injected crash boundary")
+						}
+						return nil
+					}
+					if _, err := first.Mine(context.Background(), 1, true); err == nil {
+						t.Fatal("expected injected failure")
+					}
+					if err := first.Close(); err != nil {
+						t.Fatal(err)
+					}
+					second, err := New(cfg)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer second.Close() //nolint:errcheck
+					if head := second.chain.blockchain.CurrentBlock().Number.Uint64(); head != test.wantHead {
+						t.Fatalf("recovered head = %d, want %d", head, test.wantHead)
+					}
+					if second.Revision() != test.wantRevision {
+						t.Fatalf("recovered revision = %d, want %d", second.Revision(), test.wantRevision)
+					}
+					events, err := second.EventsSince(0)
+					if err != nil || Revision(len(events)) != test.wantRevision {
+						t.Fatalf("recovered events = %#v, %v", events, err)
+					}
+				})
 			}
-			if err := first.Start(); err != nil {
-				t.Fatal(err)
-			}
-			first.commitHook = func(stage commitStage) error {
-				if stage == test.stage {
-					return errors.New("injected crash boundary")
-				}
-				return nil
-			}
-			if _, err := first.Mine(context.Background(), 1, true); err == nil {
-				t.Fatal("expected injected failure")
-			}
-			if err := first.Close(); err != nil {
-				t.Fatal(err)
-			}
-			second, err := New(cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer second.Close() //nolint:errcheck
-			if head := second.chain.blockchain.CurrentBlock().Number.Uint64(); head != test.wantHead {
-				t.Fatalf("recovered head = %d, want %d", head, test.wantHead)
-			}
-			if second.Revision() != test.wantRevision {
-				t.Fatalf("recovered revision = %d, want %d", second.Revision(), test.wantRevision)
-			}
-			events, err := second.EventsSince(0)
-			if err != nil || Revision(len(events)) != test.wantRevision {
-				t.Fatalf("recovered events = %#v, %v", events, err)
-			}
+
 		})
 	}
 }
@@ -518,28 +549,40 @@ func TestOldInPlaceStateWithoutMetadataIsRejected(t *testing.T) {
 	}
 }
 
-func TestMetadataSchemaV1RequiresRebuild(t *testing.T) {
-	cfg := testConfig()
-	cfg.Storage.Engine = "pebble"
-	cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
-	node, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := node.Close(); err != nil {
-		t.Fatal(err)
-	}
-	db := openTestPebbleDatabase(t, cfg.Storage.Path)
-	var version [8]byte
-	binary.BigEndian.PutUint64(version[:], 1)
-	if err := db.Put(stateSchemaKey, version[:]); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "recreate the database for schema v2") {
-		t.Fatalf("schema v1 error = %v", err)
+func TestMetadataSchemaOldRequiresRebuild(t *testing.T) {
+	for _, oldVersion := range []uint64{1, 2} {
+		t.Run(fmt.Sprint(oldVersion), func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Storage.Engine = "pebble"
+			cfg.Storage.Path = filepath.Join(t.TempDir(), "chain")
+			node, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := node.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db := openTestPebbleDatabase(t, cfg.Storage.Path)
+			var version [8]byte
+			binary.BigEndian.PutUint64(version[:], oldVersion)
+			if err := db.Put(stateSchemaKey, version[:]); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := New(cfg); err == nil || !strings.Contains(err.Error(), "recreate the database for schema v3") {
+				t.Fatalf("schema v1 error = %v", err)
+			}
+			db = openTestPebbleDatabase(t, cfg.Storage.Path)
+			stored, err := db.Get(stateSchemaKey)
+			if err != nil || !bytes.Equal(stored, version[:]) {
+				t.Fatalf("rejected database changed: %x %v", stored, err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

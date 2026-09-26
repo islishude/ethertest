@@ -13,7 +13,7 @@ import (
 
 func TestDefaultChainIDMatchesGethDev(t *testing.T) {
 	want := params.AllDevChainProtocolChanges.ChainID.Uint64()
-	cfg := DefaultConfig()
+	cfg := osakaTestConfig()
 	if DefaultChainID != want || cfg.Chain.ChainID != want || cfg.Chain.NetworkID != 0 || cfg.EffectiveNetworkID() != want {
 		t.Fatalf("default chain/network IDs = %d/%d (effective %d), constant = %d, want geth dev ID %d",
 			cfg.Chain.ChainID, cfg.Chain.NetworkID, cfg.EffectiveNetworkID(), DefaultChainID, want)
@@ -55,7 +55,7 @@ func TestStrictTOML(t *testing.T) {
 }
 
 func TestExternalBindingRequiresOptIn(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := osakaTestConfig()
 	cfg.HTTP.Address = "0.0.0.0:8545"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected unsafe external binding error")
@@ -71,7 +71,7 @@ func TestExternalBindingRequiresOptIn(t *testing.T) {
 }
 
 func TestTLSMaterialFailsClosedDuringValidation(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := osakaTestConfig()
 	cfg.HTTP.TLS.CertFile = filepath.Join(t.TempDir(), "missing.crt")
 	cfg.HTTP.TLS.KeyFile = filepath.Join(t.TempDir(), "missing.key")
 	if err := cfg.Validate(); err == nil {
@@ -80,7 +80,7 @@ func TestTLSMaterialFailsClosedDuringValidation(t *testing.T) {
 }
 
 func TestBeaconRequiresSharedHTTPListener(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := osakaTestConfig()
 	cfg.HTTP.Enabled = false
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected Beacon without the shared HTTP listener to fail validation")
@@ -158,7 +158,7 @@ func TestGenesisConfigurationSourcesAndNetworkInheritance(t *testing.T) {
 }
 
 func TestIPCConfigurationDefaultsAndPathResolution(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := osakaTestConfig()
 	if cfg.IPC.Enabled || cfg.IPC.Path != "ethertest.ipc" || cfg.IPCEndpoint() != "" {
 		t.Fatalf("unexpected IPC defaults: %#v endpoint=%q", cfg.IPC, cfg.IPCEndpoint())
 	}
@@ -218,7 +218,7 @@ func TestIPCConfigurationEnvironmentAndValidation(t *testing.T) {
 }
 
 func TestLogConfigurationValidation(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := osakaTestConfig()
 	if cfg.Log.Level != "info" || cfg.Log.ProgressInterval != 10*time.Second {
 		t.Fatalf("unexpected log defaults %#v", cfg.Log)
 	}
@@ -234,7 +234,7 @@ func TestLogConfigurationValidation(t *testing.T) {
 }
 
 func TestResourceLimitDefaultsEnvironmentAndPreflight(t *testing.T) {
-	defaults := DefaultConfig().Limits
+	defaults := osakaTestConfig().Limits
 	if defaults.MaxControlOperations != 256 || defaults.MaxLogBlocks != 10_000 ||
 		defaults.MaxLogResults != 10_000 || defaults.RPCGasCap != 50_000_000 ||
 		defaults.TraceTimeout != 5*time.Second || defaults.MaxFilters != 1024 ||

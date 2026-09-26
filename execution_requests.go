@@ -24,6 +24,8 @@ const (
 	executionRequestDeposit byte = iota
 	executionRequestWithdrawal
 	executionRequestConsolidation
+	executionRequestBuilderDeposit
+	executionRequestBuilderExit
 
 	maxDepositRequestsPerPayload       = 8192
 	maxWithdrawalRequestsPerPayload    = 16
@@ -101,7 +103,7 @@ type storedExecutionRequestRecord struct {
 
 type preparedExecutionRequestBlock struct {
 	Block      *types.Block
-	Requests   *electra.ExecutionRequests
+	Requests   *executionRequests
 	Record     storedExecutionRequestRecord
 	Remaining  executionRequestQueue
 	Controlled bool
@@ -352,12 +354,13 @@ func decodeConsolidationRequest(data []byte) (*electra.ConsolidationRequest, err
 	return request, nil
 }
 
-func parseExecutionRequests(requests [][]byte) (*electra.ExecutionRequests, error) {
+func parseExecutionRequests(requests [][]byte) (*executionRequests, error) {
 	if requests == nil {
 		return nil, nil
 	}
-	result := &electra.ExecutionRequests{
-		Deposits:       []*electra.DepositRequest{},
+	result := &executionRequests{
+		Deposits:        []*electra.DepositRequest{},
+		BuilderDeposits: []*gloasBuilderDepositRequest{}, BuilderExits: []*gloasBuilderExitRequest{},
 		Withdrawals:    []*electra.WithdrawalRequest{},
 		Consolidations: []*electra.ConsolidationRequest{},
 	}
@@ -367,7 +370,7 @@ func parseExecutionRequests(requests [][]byte) (*electra.ExecutionRequests, erro
 			return nil, fmt.Errorf("execution request item %d has no payload", index)
 		}
 		requestType := int(request[0])
-		if requestType > int(executionRequestConsolidation) {
+		if requestType > int(executionRequestBuilderExit) {
 			return nil, fmt.Errorf("unsupported execution request type 0x%02x", request[0])
 		}
 		if requestType <= previousType {
@@ -398,6 +401,29 @@ func parseExecutionRequests(requests [][]byte) (*electra.ExecutionRequests, erro
 				}
 				result.Withdrawals = append(result.Withdrawals, value)
 			}
+		case executionRequestBuilderDeposit:
+			if len(payload)%184 != 0 || len(payload)/184 > 64 {
+				return nil, errors.New("invalid builder deposit request payload")
+			}
+			for offset := 0; offset < len(payload); offset += 184 {
+				v := new(gloasBuilderDepositRequest)
+				copy(v.Pubkey[:], payload[offset:offset+48])
+				copy(v.WithdrawalCredentials[:], payload[offset+48:offset+80])
+				v.Amount = phase0.Gwei(binary.LittleEndian.Uint64(payload[offset+80 : offset+88]))
+				copy(v.Signature[:], payload[offset+88:offset+184])
+				result.BuilderDeposits = append(result.BuilderDeposits, v)
+			}
+		case executionRequestBuilderExit:
+			if len(payload)%68 != 0 || len(payload)/68 > 16 {
+				return nil, errors.New("invalid builder exit request payload")
+			}
+			for offset := 0; offset < len(payload); offset += 68 {
+				v := new(gloasBuilderExitRequest)
+				copy(v.SourceAddress[:], payload[offset:offset+20])
+				copy(v.Pubkey[:], payload[offset+20:offset+68])
+				result.BuilderExits = append(result.BuilderExits, v)
+			}
+
 		case executionRequestConsolidation:
 			if len(payload)%consolidationRequestSize != 0 {
 				return nil, fmt.Errorf("consolidation request payload has length %d", len(payload))
@@ -423,7 +449,7 @@ func parseExecutionRequests(requests [][]byte) (*electra.ExecutionRequests, erro
 	return result, nil
 }
 
-func marshalExecutionRequests(requests *electra.ExecutionRequests) ([][]byte, error) {
+func marshalExecutionRequests(requests *executionRequests) ([][]byte, error) {
 	if requests == nil {
 		return nil, nil
 	}
@@ -469,10 +495,41 @@ func marshalExecutionRequests(requests *electra.ExecutionRequests) ([][]byte, er
 		}
 		result = append(result, item)
 	}
+	if len(requests.BuilderDeposits) > 0 {
+		item := []byte{executionRequestBuilderDeposit}
+		for _, v := range requests.BuilderDeposits {
+			if v == nil {
+				return nil, errors.New("nil builder deposit")
+			}
+			item = append(item, v.Pubkey[:]...)
+			item = append(item, v.WithdrawalCredentials[:]...)
+			item = binary.LittleEndian.AppendUint64(item, uint64(v.Amount))
+			item = append(item, v.Signature[:]...)
+		}
+		result = append(result, item)
+	}
+	if len(requests.BuilderExits) > 0 {
+		item := []byte{executionRequestBuilderExit}
+		for _, v := range requests.BuilderExits {
+			if v == nil {
+				return nil, errors.New("nil builder exit")
+			}
+			item = append(item, v.SourceAddress[:]...)
+			item = append(item, v.Pubkey[:]...)
+		}
+		result = append(result, item)
+	}
 	return result, nil
 }
 
 func verifyExecutionRequestsHash(block *types.Block, requests [][]byte) error {
+	if block.Header().SlotNumber == nil {
+		for _, request := range requests {
+			if len(request) > 0 && request[0] >= executionRequestBuilderDeposit {
+				return errors.New("builder requests require Amsterdam")
+			}
+		}
+	}
 	requestsHash := block.RequestsHash()
 	if requests == nil {
 		if requestsHash != nil {
@@ -503,9 +560,9 @@ func equalExecutionRequestBytes(left, right [][]byte) bool {
 }
 
 func appendExecutionRequestControls(
-	requests *electra.ExecutionRequests,
+	requests *executionRequests,
 	controls executionRequestControlSet,
-) (*electra.ExecutionRequests, error) {
+) (*executionRequests, error) {
 	if requests == nil {
 		if len(controls.Deposits)+len(controls.Withdrawals)+len(controls.Consolidations) != 0 {
 			return nil, errors.New("pre-Prague block cannot contain execution request controls")
@@ -683,14 +740,12 @@ func (n *Node) pendingCandidateAtSlot(
 	var root common.Hash
 	if candidate != nil {
 		stableState, root, err = candidate.commit(
-			statedb, prepared.Block.NumberU64(), true,
-			chain.config.IsCancun(prepared.Block.Number(), prepared.Block.Time()),
+			statedb, prepared.Block.NumberU64(), chain.config.Rules(prepared.Block.Number(), true, prepared.Block.Time()),
 		)
 	} else {
 		trieDB := statedb.Database().TrieDB()
 		root, err = statedb.Commit(
-			prepared.Block.NumberU64(), true,
-			chain.config.IsCancun(prepared.Block.Number(), prepared.Block.Time()),
+			chain.config.Rules(prepared.Block.Number(), true, prepared.Block.Time()), prepared.Block.NumberU64(),
 		)
 		if err == nil {
 			parentRoot := chain.blockchain.CurrentBlock().Root
@@ -868,6 +923,12 @@ func executionRequestsFromConsensusBlock(block *consensusBlock) ([][]byte, error
 	if block == nil {
 		return nil, errors.New("beacon projection is missing")
 	}
+	if block.gloas != nil {
+		if err := block.validateGloasStructure(); err != nil {
+			return nil, err
+		}
+		return marshalExecutionRequests(block.envelope.Message.ExecutionRequests)
+	}
 	if block.deneb != nil {
 		return nil, nil
 	}
@@ -875,7 +936,7 @@ func executionRequestsFromConsensusBlock(block *consensusBlock) ([][]byte, error
 		block.electra.Message.Body.ExecutionRequests == nil {
 		return nil, errors.New("electra Beacon projection has no execution requests")
 	}
-	return marshalExecutionRequests(block.electra.Message.Body.ExecutionRequests)
+	return marshalExecutionRequests(requestsFromElectra(block.electra.Message.Body.ExecutionRequests))
 }
 
 func deriveNativeExecutionRequests(
@@ -911,7 +972,7 @@ func executeNativeExecutionRequests(chain *executionChain, block *types.Block) (
 	if err != nil {
 		return nil, fmt.Errorf("open parent state for block %s: %w", block.Hash(), err)
 	}
-	result, err := chain.blockchain.Processor().Process(context.Background(), block, statedb, nil, vm.Config{}, nil)
+	result, err := chain.blockchain.Processor().Process(context.Background(), block, statedb, nil, nil, vm.Config{}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("re-execute block %s to recover native execution requests: %w", block.Hash(), err)
 	}
@@ -1054,14 +1115,15 @@ func validateExecutionRequestMetadata(n *Node, chain *executionChain) error {
 	return nil
 }
 
-func cloneElectraExecutionRequests(requests *electra.ExecutionRequests) *electra.ExecutionRequests {
+func cloneElectraExecutionRequests(requests *executionRequests) *executionRequests {
 	if requests == nil {
-		return &electra.ExecutionRequests{
+		return &executionRequests{
+			BuilderDeposits: []*gloasBuilderDepositRequest{}, BuilderExits: []*gloasBuilderExitRequest{},
 			Deposits: []*electra.DepositRequest{}, Withdrawals: []*electra.WithdrawalRequest{},
 			Consolidations: []*electra.ConsolidationRequest{},
 		}
 	}
-	cloned := &electra.ExecutionRequests{
+	cloned := &executionRequests{
 		Deposits:       make([]*electra.DepositRequest, len(requests.Deposits)),
 		Withdrawals:    make([]*electra.WithdrawalRequest, len(requests.Withdrawals)),
 		Consolidations: make([]*electra.ConsolidationRequest, len(requests.Consolidations)),
@@ -1078,6 +1140,16 @@ func cloneElectraExecutionRequests(requests *electra.ExecutionRequests) *electra
 	for index, request := range requests.Consolidations {
 		value := *request
 		cloned.Consolidations[index] = &value
+	}
+	cloned.BuilderDeposits = make([]*gloasBuilderDepositRequest, len(requests.BuilderDeposits))
+	for i, v := range requests.BuilderDeposits {
+		value := *v
+		cloned.BuilderDeposits[i] = &value
+	}
+	cloned.BuilderExits = make([]*gloasBuilderExitRequest, len(requests.BuilderExits))
+	for i, v := range requests.BuilderExits {
+		value := *v
+		cloned.BuilderExits[i] = &value
 	}
 	return cloned
 }

@@ -292,9 +292,16 @@ func (api *ethAPI) Config(_ context.Context) (*executionConfigResponse, error) {
 	}
 	currentTime := api.node.chain.blockchain.CurrentBlock().Time
 	currentFork := chainConfig.LatestFork(currentTime)
+	var next *uint64
+	for fork := currentFork + 1; fork <= chainConfig.LatestFork(^uint64(0)); fork++ {
+		if timestamp := chainConfig.Timestamp(fork); timestamp != nil {
+			next = timestamp
+			break
+		}
+	}
 	response := &executionConfigResponse{
 		Current: assemble(chainConfig.Timestamp(currentFork)),
-		Next:    assemble(chainConfig.Timestamp(currentFork + 1)),
+		Next:    assemble(next),
 		Last:    assemble(chainConfig.Timestamp(chainConfig.LatestFork(^uint64(0)))),
 	}
 	if response.Next == nil {

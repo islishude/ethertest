@@ -12,17 +12,18 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-const projectionFormat = 1
+const projectionFormat = 2
 
 var projectionPrefix = []byte("ethertest/beacon-projection/")
 
 type storedProjection struct {
-	Format     int         `json:"format"`
-	Fork       string      `json:"fork"`
-	Slot       uint64      `json:"slot"`
-	Root       phase0.Root `json:"root"`
-	ParentRoot phase0.Root `json:"parent_root"`
-	SignedSSZ  []byte      `json:"signed_ssz"`
+	Format      int         `json:"format"`
+	Fork        string      `json:"fork"`
+	Slot        uint64      `json:"slot"`
+	Root        phase0.Root `json:"root"`
+	ParentRoot  phase0.Root `json:"parent_root"`
+	EnvelopeSSZ []byte      `json:"envelope_ssz,omitempty"`
+	SignedSSZ   []byte      `json:"signed_ssz"`
 }
 
 func projectionKey(hash common.Hash) []byte {
@@ -50,6 +51,21 @@ func loadProjection(chain *executionChain, hash common.Hash) (*consensusBlock, s
 	}
 	var block consensusBlock
 	switch record.Fork {
+	case "gloas":
+		block.gloas = new(gloasSignedBeaconBlock)
+		block.envelope = new(gloasSignedPayloadEnvelope)
+		if err := gloasSSZ.UnmarshalSSZ(block.gloas, record.SignedSSZ); err != nil {
+			return nil, storedProjection{}, false, err
+		}
+		if len(record.EnvelopeSSZ) == 0 {
+			return nil, storedProjection{}, false, errors.New("gloas envelope is missing")
+		}
+		if err := gloasSSZ.UnmarshalSSZ(block.envelope, record.EnvelopeSSZ); err != nil {
+			return nil, storedProjection{}, false, err
+		}
+		if err := block.validateGloasStructure(); err != nil {
+			return nil, storedProjection{}, false, err
+		}
 	case "deneb":
 		value := new(deneb.SignedBeaconBlock)
 		if err := value.UnmarshalSSZ(record.SignedSSZ); err != nil {
@@ -84,7 +100,7 @@ func loadProjection(chain *executionChain, hash common.Hash) (*consensusBlock, s
 func (m *consensusModel) projectionRecord(
 	chain *executionChain,
 	block *types.Block,
-	requests *electra.ExecutionRequests,
+	requests *executionRequests,
 ) (storedProjection, []byte, error) {
 	signed, err := m.signedBlockWithRequests(chain, block, requests)
 	if err != nil {
@@ -101,6 +117,12 @@ func (m *consensusModel) projectionRecord(
 	record := storedProjection{
 		Format: projectionFormat, Fork: m.forkName(chain.slotOf(block)), Slot: chain.slotOf(block),
 		Root: root, ParentRoot: signed.parentRoot(), SignedSSZ: ssz,
+	}
+	if signed.envelope != nil {
+		record.EnvelopeSSZ, err = gloasSSZ.MarshalSSZ(signed.envelope)
+		if err != nil {
+			return storedProjection{}, nil, err
+		}
 	}
 	encoded, err := json.Marshal(record)
 	if err != nil {
@@ -133,7 +155,7 @@ func (m *consensusModel) ensureProjection(chain *executionChain, block *types.Bl
 func (m *consensusModel) projectionPut(
 	chain *executionChain,
 	block *types.Block,
-	requests *electra.ExecutionRequests,
+	requests *executionRequests,
 ) (journalKV, error) {
 	record, encoded, err := m.projectionRecord(chain, block, requests)
 	if err != nil {
@@ -178,6 +200,9 @@ func initializeBeaconRootIndex(model *consensusModel, chain *executionChain) err
 		}
 		if chain.config.IsOsaka(executionBlock.Number(), executionBlock.Time()) {
 			expectedFork = "fulu"
+		}
+		if chain.config.IsAmsterdam(executionBlock.Number(), executionBlock.Time()) {
+			expectedFork = "gloas"
 		}
 		if projection.Fork != expectedFork {
 			return fmt.Errorf("beacon projection %s uses fork %q, want %q", hash, projection.Fork, expectedFork)

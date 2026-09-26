@@ -51,9 +51,10 @@ type ChainConfig struct {
 }
 
 type ForkConfig struct {
-	CancunEpoch uint64 `toml:"cancun_epoch"`
-	PragueEpoch uint64 `toml:"prague_epoch"`
-	OsakaEpoch  uint64 `toml:"osaka_epoch"`
+	AmsterdamEpoch int64  `toml:"amsterdam_epoch"`
+	CancunEpoch    uint64 `toml:"cancun_epoch"`
+	PragueEpoch    uint64 `toml:"prague_epoch"`
+	OsakaEpoch     uint64 `toml:"osaka_epoch"`
 }
 
 type AccountsConfig struct {
@@ -204,6 +205,18 @@ func (c Config) validateResolved() error {
 		return errors.New("slot duration and slots per epoch overflow")
 	}
 	epochSeconds := slotSeconds * c.Chain.SlotsPerEpoch
+	if c.Chain.Forks.AmsterdamEpoch < -1 {
+		return errors.New("amsterdam_epoch must be -1 or non-negative")
+	}
+	if c.Chain.Forks.AmsterdamEpoch >= 0 {
+		epoch := uint64(c.Chain.Forks.AmsterdamEpoch)
+		if epoch < c.Chain.Forks.OsakaEpoch {
+			return errors.New("fork epochs must satisfy Osaka <= Amsterdam")
+		}
+		if epoch > (math.MaxUint64-uint64(c.Chain.GenesisTime))/epochSeconds {
+			return errors.New("amsterdam activation time overflows uint64")
+		}
+	}
 	if c.Chain.Forks.OsakaEpoch > math.MaxUint64/epochSeconds {
 		return errors.New("fork activation time overflows uint64")
 	}
@@ -401,6 +414,7 @@ func applyEnv(c *Config) error {
 		{"CANCUN_EPOCH", uint(&c.Chain.Forks.CancunEpoch)},
 		{"PRAGUE_EPOCH", uint(&c.Chain.Forks.PragueEpoch)},
 		{"OSAKA_EPOCH", uint(&c.Chain.Forks.OsakaEpoch)},
+		{"AMSTERDAM_EPOCH", int64Value(&c.Chain.Forks.AmsterdamEpoch)},
 		{"HTTP_ADDRESS", func(v string) error { c.HTTP.Address = v; return nil }},
 		{"HTTP_ENABLED", boolean(&c.HTTP.Enabled)},
 		{"HTTP_CORS", func(v string) error { c.HTTP.CORS = strings.Split(v, ","); return nil }},

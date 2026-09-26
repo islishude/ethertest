@@ -363,6 +363,13 @@ func (sim *simulator) makeHeaders(blocks []simulationBlock) ([]*types.Header, er
 			Coinbase: previous.Coinbase, Difficulty: difficulty, Number: number, GasLimit: previous.GasLimit, Time: timestamp,
 			WithdrawalsHash: withdrawalsRoot, ParentBeaconRoot: beaconRoot,
 		}
+		if sim.config.IsAmsterdam(number, timestamp) {
+			if timestamp < sim.node.chain.genesisTime {
+				return nil, &invalidParamsError{message: "simulation timestamp precedes genesis"}
+			}
+			slot := (timestamp - sim.node.chain.genesisTime) / sim.node.chain.slotDuration
+			header.SlotNumber = &slot
+		}
 		if overrides.GasLimit != nil {
 			header.GasLimit = uint64(*overrides.GasLimit)
 		}
@@ -478,9 +485,9 @@ func (sim *simulator) processBlock(ctx context.Context, block *simulationBlock, 
 		}
 		var postState []byte
 		if sim.config.IsByzantium(header.Number) {
-			blockAccessList.Merge(hookedState.Finalise(true))
+			blockAccessList.Merge(hookedState.Finalise(rules))
 		} else {
-			postState = sim.state.IntermediateRoot(sim.config.IsEIP158(header.Number)).Bytes()
+			postState = sim.state.IntermediateRoot(rules).Bytes()
 		}
 		receipt := core.MakeReceipt(evm, result, sim.state, header.Number, common.Hash{}, header.Time, transaction, gasPool.CumulativeUsed(), postState)
 		receipts[index] = receipt
@@ -804,7 +811,7 @@ func applySimulationStateOverrides(overrides *stateOverride, statedb *state.Stat
 			}
 		}
 	}
-	statedb.Finalise(false)
+	statedb.Finalise(params.Rules{})
 	return nil
 }
 

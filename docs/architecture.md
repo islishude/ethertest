@@ -27,8 +27,8 @@ reached the target, and fails closed when neither state matches. Events, request
 queue changes and consumed IDs, Beacon projections, and slot/safety metadata
 share the auxiliary batch.
 
-The alpha metadata layout is schema v2. There is no migration path from schema
-v1: an old or marker-less database is rejected with an instruction to create a
+The alpha metadata layout is schema v3. There is no migration path from schema
+v1/v2: an old or marker-less database is rejected with an instruction to create a
 fresh chain. New Pebble databases are fully initialized in a sibling staging
 directory before they atomically replace the requested empty destination.
 For a new generated chain, `genesis_time = 0` is resolved once; subsequent
@@ -110,7 +110,7 @@ normal request validation, because no corresponding execution transition
 exists. It receives permanent `execution-request-control` taint. Native-only
 blocks remain replayable and untainted.
 
-The network advertises `consensusMode: synthetic`, `beaconApi: v4-subset`,
+The network advertises `consensusMode: synthetic`, `beaconApi: gloas-subset`,
 `fullConsensus: false`, and `releaseComplete: false`.
 
 ## Explicit non-goals for v0.1
@@ -122,3 +122,29 @@ The network advertises `consensusMode: synthetic`, `beaconApi: v4-subset`,
 - JavaScript tracers;
 - external validator clients;
 - production deployment or large-scale indexing.
+
+## Amsterdam/Gloas projection
+
+Amsterdam is paired with Gloas at the configured epoch (default genesis).
+Every Amsterdam header uses the actual timeline slot, including missed slots,
+pending candidates, branches, simulation, and control blocks. BAL bytes survive
+resealing and persistence and must hash to the header's blockAccessListHash.
+Trie key preimages are retained in the shared database and candidate journal so
+full storage replacements can enumerate and clear old slots explicitly. Missing
+preimages fail before publication. Control-state overrides merge their state changes at the post-execution BAL
+index and remain permanently tainted; they do not claim clean geth replay.
+
+Gloas uses progressive SSZ containers/lists with the existing dynamic-ssz
+library. A deterministic self-build bid commits the current payload hash and
+blob commitments. Its builder index is UINT64_MAX and its signature is the
+specified infinity signature. The signed execution payload envelope commits
+that Beacon block root, current execution requests, slot, and full BAL. It uses
+the deterministic proposer key and the Beacon builder domain. The Beacon body
+carries parent execution requests; the Fulu-to-Gloas transition starts empty.
+The projection record journals block and envelope SSZ together. Startup checks
+roots, payload references, signatures, slots, requests, and BAL against execution
+history and fails visibly on missing or corrupt objects.
+
+Gloas data-column sidecars contain index, column, proofs, slot, and block root;
+commitments are resolved from the bid. This is still a synthetic consensus model,
+with no builder networking or actual BeaconState transition.

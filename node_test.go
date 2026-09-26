@@ -19,7 +19,7 @@ import (
 )
 
 func testConfig() Config {
-	cfg := DefaultConfig()
+	cfg := osakaTestConfig()
 	cfg.Chain.GenesisTime = 1_800_000_000
 	cfg.HTTP.Enabled = false
 	cfg.Beacon.Enabled = false
@@ -358,110 +358,140 @@ func assertRPCSenderAndRecipient(t *testing.T, value map[string]any, from, to co
 }
 
 func TestSnapshotIsOneShotAndReorgEventsAreOrdered(t *testing.T) {
-	cfg := testConfig()
-	cfg.Mining.Mode = miningModeManual
-	node, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := node.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer node.Close() //nolint:errcheck
-	if _, err := node.Mine(context.Background(), 1, true); err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := node.Snapshot(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := node.Mine(context.Background(), 2, true); err != nil {
-		t.Fatal(err)
-	}
-	if ok, err := node.Revert(context.Background(), snapshot); err != nil || !ok {
-		t.Fatalf("revert: ok=%v err=%v", ok, err)
-	}
-	if have := node.chain.blockchain.CurrentBlock().Number.Uint64(); have != 1 {
-		t.Fatalf("head is %d, want 1", have)
-	}
-	if ok, err := node.Revert(context.Background(), snapshot); err != nil || ok {
-		t.Fatalf("second revert: ok=%v err=%v", ok, err)
-	}
-	events, err := node.EventsSince(3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 3 || !events[0].Removed || !events[1].Removed ||
-		events[0].BlockNumber != 3 || events[1].BlockNumber != 2 || events[2].Type != "chain_reorg" {
-		t.Fatalf("unexpected reorg events %#v", events)
+	for _, activation := range []int64{-1, 0} {
+		name := "osaka"
+		if activation == 0 {
+			name = "amsterdam"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Chain.Forks.AmsterdamEpoch = activation
+			cfg.Mining.Mode = miningModeManual
+			node, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := node.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer node.Close() //nolint:errcheck
+			if _, err := node.Mine(context.Background(), 1, true); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := node.Snapshot(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := node.Mine(context.Background(), 2, true); err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := node.Revert(context.Background(), snapshot); err != nil || !ok {
+				t.Fatalf("revert: ok=%v err=%v", ok, err)
+			}
+			if have := node.chain.blockchain.CurrentBlock().Number.Uint64(); have != 1 {
+				t.Fatalf("head is %d, want 1", have)
+			}
+			if ok, err := node.Revert(context.Background(), snapshot); err != nil || ok {
+				t.Fatalf("second revert: ok=%v err=%v", ok, err)
+			}
+			events, err := node.EventsSince(3)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != 3 || !events[0].Removed || !events[1].Removed ||
+				events[0].BlockNumber != 3 || events[1].BlockNumber != 2 || events[2].Type != "chain_reorg" {
+				t.Fatalf("unexpected reorg events %#v", events)
+			}
+
+		})
 	}
 }
 
 func TestExplicitBranchSwitch(t *testing.T) {
-	cfg := testConfig()
-	cfg.Mining.Mode = miningModeManual
-	node, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := node.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer node.Close() //nolint:errcheck
-	if _, err := node.Mine(context.Background(), 1, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := node.CreateBranch(context.Background(), "alternative", 1); err != nil {
-		t.Fatal(err)
-	}
-	canonical, err := node.Mine(context.Background(), 1, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	alternative, err := node.MineBranch(context.Background(), "alternative", 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := node.SwitchBranch(context.Background(), "alternative"); err != nil {
-		t.Fatal(err)
-	}
-	head := node.chain.blockchain.CurrentBlock()
-	if head.Hash() != alternative[1] || head.Hash() == canonical[0] {
-		t.Fatalf("unexpected canonical head %s", head.Hash())
+	for _, activation := range []int64{-1, 0} {
+		name := "osaka"
+		if activation == 0 {
+			name = "amsterdam"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Chain.Forks.AmsterdamEpoch = activation
+			cfg.Mining.Mode = miningModeManual
+			node, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := node.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer node.Close() //nolint:errcheck
+			if _, err := node.Mine(context.Background(), 1, true); err != nil {
+				t.Fatal(err)
+			}
+			if err := node.CreateBranch(context.Background(), "alternative", 1); err != nil {
+				t.Fatal(err)
+			}
+			canonical, err := node.Mine(context.Background(), 1, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			alternative, err := node.MineBranch(context.Background(), "alternative", 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := node.SwitchBranch(context.Background(), "alternative"); err != nil {
+				t.Fatal(err)
+			}
+			head := node.chain.blockchain.CurrentBlock()
+			if head.Hash() != alternative[1] || head.Hash() == canonical[0] {
+				t.Fatalf("unexpected canonical head %s", head.Hash())
+			}
+
+		})
 	}
 }
 
 func TestMissedSlotsRemainDistinctFromExecutionBlockNumbers(t *testing.T) {
-	cfg := testConfig()
-	cfg.Mining.Mode = miningModeManual
-	node, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := node.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer node.Close() //nolint:errcheck
-	if _, err := node.MissSlots(context.Background(), 2); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := node.Mine(context.Background(), 1, true); err != nil {
-		t.Fatal(err)
-	}
-	block := node.chain.blockchain.GetBlockByNumber(1)
-	if slot := node.chain.slotOf(block); slot != 3 {
-		t.Fatalf("slot is %d, want 3", slot)
-	}
-	wantTime := uint64(cfg.Chain.GenesisTime) + 3*uint64(cfg.Chain.SlotDuration.Seconds())
-	if block.Time() != wantTime {
-		t.Fatalf("timestamp is %d, want %d", block.Time(), wantTime)
-	}
-	if _, err := node.beaconBlockID("1"); err == nil {
-		t.Fatal("missed slot unexpectedly resolved to a block")
-	}
-	resolved, err := node.beaconBlockID("3")
-	if err != nil || resolved.Hash() != block.Hash() {
-		t.Fatalf("slot 3 resolution: block=%v err=%v", resolved, err)
+	for _, activation := range []int64{-1, 0} {
+		name := "osaka"
+		if activation == 0 {
+			name = "amsterdam"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Chain.Forks.AmsterdamEpoch = activation
+			cfg.Mining.Mode = miningModeManual
+			node, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := node.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer node.Close() //nolint:errcheck
+			if _, err := node.MissSlots(context.Background(), 2); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := node.Mine(context.Background(), 1, true); err != nil {
+				t.Fatal(err)
+			}
+			block := node.chain.blockchain.GetBlockByNumber(1)
+			if slot := node.chain.slotOf(block); slot != 3 {
+				t.Fatalf("slot is %d, want 3", slot)
+			}
+			wantTime := uint64(cfg.Chain.GenesisTime) + 3*uint64(cfg.Chain.SlotDuration.Seconds())
+			if block.Time() != wantTime {
+				t.Fatalf("timestamp is %d, want %d", block.Time(), wantTime)
+			}
+			if _, err := node.beaconBlockID("1"); err == nil {
+				t.Fatal("missed slot unexpectedly resolved to a block")
+			}
+			resolved, err := node.beaconBlockID("3")
+			if err != nil || resolved.Hash() != block.Hash() {
+				t.Fatalf("slot 3 resolution: block=%v err=%v", resolved, err)
+			}
+
+		})
 	}
 }
 

@@ -85,6 +85,10 @@ func executionChainConfig(cfg Config) *params.ChainConfig {
 		value := uint64(cfg.Chain.GenesisTime) + epoch*cfg.Chain.SlotsPerEpoch*uint64(cfg.Chain.SlotDuration/time.Second)
 		return &value
 	}
+	var amsterdamTime *uint64
+	if cfg.Chain.Forks.AmsterdamEpoch >= 0 {
+		amsterdamTime = activationTime(uint64(cfg.Chain.Forks.AmsterdamEpoch))
+	}
 	zeroBlock := func() *big.Int { return new(big.Int) }
 	zeroTime := uint64(0)
 	return &params.ChainConfig{
@@ -106,6 +110,7 @@ func executionChainConfig(cfg Config) *params.ChainConfig {
 		CancunTime:              activationTime(cfg.Chain.Forks.CancunEpoch),
 		PragueTime:              activationTime(cfg.Chain.Forks.PragueEpoch),
 		OsakaTime:               activationTime(cfg.Chain.Forks.OsakaEpoch),
+		AmsterdamTime:           amsterdamTime,
 		TerminalTotalDifficulty: zeroBlock(),
 		BlobScheduleConfig:      repositoryBlobSchedule(),
 	}
@@ -217,6 +222,8 @@ func newExecutionChain(cfg *Config, accounts []common.Address, suppliedGenesis *
 	bcCfg := core.DefaultConfig()
 	bcCfg.ArchiveMode = cfg.Storage.Archive
 	bcCfg.TxLookupLimit = 0
+	// Storage preimages let Amsterdam control blocks record complete storage resets.
+	bcCfg.Preimages = true
 	blockchain, err := core.NewBlockChain(database, genesis, engine, bcCfg)
 	if err != nil {
 		_ = database.Close() //nolint:errcheck
@@ -558,6 +565,10 @@ func (c *executionChain) generateBlock(
 		Number: new(big.Int).Add(parent.Number(), big.NewInt(1)), GasLimit: parent.GasLimit(),
 		Time: targetTime, Difficulty: new(big.Int), Extra: append([]byte(nil), extra...),
 	}
+	if c.config.IsAmsterdam(header.Number, header.Time) {
+		slot := (targetTime - c.genesisTime) / c.slotDuration
+		header.SlotNumber = &slot
+	}
 	if c.config.IsLondon(header.Number) {
 		header.BaseFee = eip1559.CalcBaseFee(c.config, parentHeader)
 		if !c.config.IsLondon(parent.Number()) {
@@ -622,7 +633,7 @@ func (c *executionChain) generateBlock(
 		txEVM := vm.NewEVM(core.NewEVMBlockContext(header, c.blockchain, nil), postState, c.config, vm.Config{})
 		txEVM.SetTxContext(core.NewEVMTxContext(message))
 		receipt, accessList, applyErr := core.ApplyTransactionWithEVM(
-			message, gasPool, postState, header.Number, header.Hash(), header.Time, tx, txEVM,
+			ctx, message, gasPool, postState, header.Number, header.Hash(), header.Time, tx, txEVM,
 		)
 		txEVM.Release()
 		if applyErr != nil {
@@ -665,6 +676,11 @@ func (c *executionChain) generateBlock(
 		return nil, nil, nil, nil, err
 	}
 	block = core.AssembleBlock(c.blockchain, header, postState, body, receipts, blockAccessList)
+	if list := block.AccessList(); list != nil {
+		if err := list.Validate(block.GasLimit(), len(block.Transactions())); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
 	if err := c.deriveReceiptFields(block, receipts); err != nil {
 		return nil, nil, nil, nil, err
 	}

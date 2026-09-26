@@ -38,11 +38,16 @@ type consensusModel struct {
 }
 
 type consensusBlock struct {
-	deneb   *deneb.SignedBeaconBlock
-	electra *electra.SignedBeaconBlock
+	gloas    *gloasSignedBeaconBlock
+	envelope *gloasSignedPayloadEnvelope
+	deneb    *deneb.SignedBeaconBlock
+	electra  *electra.SignedBeaconBlock
 }
 
 func (b *consensusBlock) messageRoot() (phase0.Root, error) {
+	if b.gloas != nil {
+		return gloasSSZ.HashTreeRoot(b.gloas.Message)
+	}
 	if b.deneb != nil {
 		return b.deneb.Message.HashTreeRoot()
 	}
@@ -50,6 +55,9 @@ func (b *consensusBlock) messageRoot() (phase0.Root, error) {
 }
 
 func (b *consensusBlock) marshalSSZ() ([]byte, error) {
+	if b.gloas != nil {
+		return gloasSSZ.MarshalSSZ(b.gloas)
+	}
 	if b.deneb != nil {
 		return b.deneb.MarshalSSZ()
 	}
@@ -57,6 +65,9 @@ func (b *consensusBlock) marshalSSZ() ([]byte, error) {
 }
 
 func (b *consensusBlock) value() any {
+	if b.gloas != nil {
+		return b.gloas
+	}
 	if b.deneb != nil {
 		return b.deneb
 	}
@@ -64,6 +75,9 @@ func (b *consensusBlock) value() any {
 }
 
 func (b *consensusBlock) commitments() []deneb.KZGCommitment {
+	if b.gloas != nil {
+		return b.gloas.Message.Body.SignedExecutionPayloadBid.Message.BlobKZGCommitments
+	}
 	if b.deneb != nil {
 		return b.deneb.Message.Body.BlobKZGCommitments
 	}
@@ -71,6 +85,9 @@ func (b *consensusBlock) commitments() []deneb.KZGCommitment {
 }
 
 func (b *consensusBlock) slot() uint64 {
+	if b.gloas != nil {
+		return uint64(b.gloas.Message.Slot)
+	}
 	if b.deneb != nil {
 		return uint64(b.deneb.Message.Slot)
 	}
@@ -78,6 +95,9 @@ func (b *consensusBlock) slot() uint64 {
 }
 
 func (b *consensusBlock) parentRoot() phase0.Root {
+	if b.gloas != nil {
+		return b.gloas.Message.ParentRoot
+	}
 	if b.deneb != nil {
 		return b.deneb.Message.ParentRoot
 	}
@@ -85,6 +105,12 @@ func (b *consensusBlock) parentRoot() phase0.Root {
 }
 
 func (b *consensusBlock) executionHash() (common.Hash, error) {
+	if b.gloas != nil {
+		if err := b.validateGloasStructure(); err != nil {
+			return common.Hash{}, err
+		}
+		return common.Hash(b.envelope.Message.Payload.BlockHash), nil
+	}
 	if b.deneb != nil && b.deneb.Message != nil && b.deneb.Message.Body != nil && b.deneb.Message.Body.ExecutionPayload != nil {
 		return common.Hash(b.deneb.Message.Body.ExecutionPayload.BlockHash), nil
 	}
@@ -99,7 +125,7 @@ func (m *consensusModel) validateProjectionObject(
 	executionBlock *types.Block,
 	projection *consensusBlock,
 ) error {
-	var requests *electra.ExecutionRequests
+	var requests *executionRequests
 	if executionBlock.NumberU64() != 0 {
 		record, exists, err := loadExecutionRequestRecord(chain, executionBlock.Hash())
 		if err != nil {
@@ -123,6 +149,9 @@ func (m *consensusModel) validateProjectionObject(
 	binary.LittleEndian.PutUint64(stateInput[32:], slot)
 	expectedStateRoot := phase0.Root(sha256.Sum256(stateInput[:]))
 	expectedProposer := phase0.ValidatorIndex(slot % uint64(len(m.keys)))
+	if projection.gloas != nil {
+		return m.validateGloas(chain, executionBlock, projection, expectedBody, requests, expectedStateRoot, expectedProposer)
+	}
 	var objectRoot phase0.Root
 	var signature phase0.BLSSignature
 	if projection.deneb != nil {
@@ -290,6 +319,14 @@ func (m *consensusModel) signedHeader(chain *executionChain, block *types.Block)
 	if err != nil {
 		return nil, err
 	}
+	if signed.gloas != nil {
+		b := signed.gloas.Message
+		root, err := gloasSSZ.HashTreeRoot(b.Body)
+		if err != nil {
+			return nil, err
+		}
+		return &phase0.SignedBeaconBlockHeader{Message: &phase0.BeaconBlockHeader{Slot: b.Slot, ProposerIndex: b.ProposerIndex, ParentRoot: b.ParentRoot, StateRoot: b.StateRoot, BodyRoot: root}, Signature: signed.gloas.Signature}, nil
+	}
 	if signed.deneb != nil {
 		bodyRoot, err := signed.deneb.Message.Body.HashTreeRoot()
 		if err != nil {
@@ -325,7 +362,7 @@ func (m *consensusModel) signedBlock(chain *executionChain, block *types.Block) 
 func (m *consensusModel) signedBlockWithRequests(
 	chain *executionChain,
 	block *types.Block,
-	requests *electra.ExecutionRequests,
+	requests *executionRequests,
 ) (*consensusBlock, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -335,7 +372,7 @@ func (m *consensusModel) signedBlockWithRequests(
 func (m *consensusModel) signedBlockLocked(
 	chain *executionChain,
 	block *types.Block,
-	requests *electra.ExecutionRequests,
+	requests *executionRequests,
 ) (*consensusBlock, error) {
 	if existing := m.blocks[block.Hash()]; existing != nil {
 		return existing, nil
@@ -378,7 +415,12 @@ func (m *consensusModel) signedBlockLocked(
 	syntheticProposer := phase0.ValidatorIndex(slot % uint64(len(m.keys)))
 	syntheticStateRoot := phase0.Root(sha256.Sum256(stateInput[:]))
 	var signed *consensusBlock
-	if slot/m.slotsPerEpoch < m.forks.PragueEpoch {
+	if m.forkName(slot) == "gloas" {
+		signed, err = m.buildGloas(chain, block, body, requests, parentRoot, syntheticStateRoot, syntheticProposer)
+		if err != nil {
+			return nil, err
+		}
+	} else if slot/m.slotsPerEpoch < m.forks.PragueEpoch {
 		denebBody := denebBodyFromElectra(body)
 		message := &deneb.BeaconBlock{
 			Slot: phase0.Slot(slot), ProposerIndex: syntheticProposer,
@@ -429,7 +471,7 @@ func (m *consensusModel) body(
 	chain *executionChain,
 	block *types.Block,
 	slot uint64,
-	executionRequests *electra.ExecutionRequests,
+	executionRequests *executionRequests,
 ) (*electra.BeaconBlockBody, error) {
 	transactions := make([]bellatrix.Transaction, len(block.Transactions()))
 	commitments := make([]deneb.KZGCommitment, 0)
@@ -483,7 +525,7 @@ func (m *consensusModel) body(
 		SyncAggregate:    &altair.SyncAggregate{SyncCommitteeBits: make(bitfield.Bitvector512, 64)},
 		ExecutionPayload: payload, BLSToExecutionChanges: []*capella.SignedBLSToExecutionChange{},
 		BlobKZGCommitments: commitments,
-		ExecutionRequests:  cloneElectraExecutionRequests(executionRequests),
+		ExecutionRequests:  cloneElectraExecutionRequests(executionRequests).electra(),
 	}, nil
 }
 
@@ -695,6 +737,8 @@ func (m *consensusModel) sign(objectRoot [32]byte, domainType phase0.DomainType,
 func (m *consensusModel) forkVersion(slot uint64) phase0.Version {
 	epoch := slot / m.slotsPerEpoch
 	switch {
+	case m.forks.AmsterdamEpoch >= 0 && epoch >= uint64(m.forks.AmsterdamEpoch):
+		return phase0.Version{0x07, 0, 0, 0}
 	case epoch >= m.forks.OsakaEpoch:
 		return phase0.Version{0x06, 0, 0, 0}
 	case epoch >= m.forks.PragueEpoch:
@@ -711,6 +755,8 @@ func (m *consensusModel) forkName(slot uint64) string {
 		return "deneb"
 	case 0x05:
 		return "electra"
+	case 0x07:
+		return "gloas"
 	default:
 		return "fulu"
 	}

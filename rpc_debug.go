@@ -216,7 +216,7 @@ func (api *debugAPI) traceBlock(ctx context.Context, block *types.Block, config 
 		state.SetTxContext(tx.Hash(), index, uint32(index+1))
 		stop := context.AfterFunc(ctx, evm.Cancel)
 		_, _, applyErr := core.ApplyTransactionWithEVM(
-			message, gasPool, state, block.Number(), block.Hash(), block.Time(), tx, evm,
+			ctx, message, gasPool, state, block.Number(), block.Hash(), block.Time(), tx, evm,
 		)
 		stop()
 		cancelled := evm.Cancelled() || errors.Is(ctx.Err(), context.DeadlineExceeded)

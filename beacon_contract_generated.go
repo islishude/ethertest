@@ -2,6 +2,11 @@
 
 package ethertest
 
+// BeaconExecutionPayloadEnvelopeRequest is generated from the locked path and query parameters.
+type BeaconExecutionPayloadEnvelopeRequest struct {
+	BlockID string `path:"block_id"`
+}
+
 // BeaconBlockRequest is generated from the locked path and query parameters.
 type BeaconBlockRequest struct {
 	BlockID string `path:"block_id"`
@@ -61,10 +66,12 @@ type BeaconVersionedResponse[T any] struct {
 }
 
 var beaconGeneratedEventTopics = map[string]struct{}{
-	"head":                 {},
-	"block":                {},
-	"chain_reorg":          {},
-	"finalized_checkpoint": {},
+	"head":                        {},
+	"head_v2":                     {},
+	"block":                       {},
+	"chain_reorg":                 {},
+	"finalized_checkpoint":        {},
+	"execution_payload_available": {},
 }
 
 var beaconGeneratedValidatorStatuses = map[string]struct{}{

@@ -101,10 +101,10 @@ func TestGenesisCommandLineConfigurationIsAuthoritative(t *testing.T) {
 		t.Fatalf("printed effective chain configuration = %#v", printedConfig.Chain)
 	}
 	summary := networkDescription(cfg)
-	forkEpochs, ok := summary["forkEpochs"].(map[string]uint64)
+	forkEpochs, ok := summary["forkEpochs"].(map[string]any)
 	if !ok || summary["chainId"] != uint64(4242) || summary["networkId"] != uint64(777) ||
 		summary["gasLimit"] != uint64(30_000_000) || summary["fork"] != "deneb" ||
-		forkEpochs["prague"] != 1 || forkEpochs["osaka"] != 2 {
+		forkEpochs["prague"] != uint64(1) || forkEpochs["osaka"] != uint64(2) {
 		t.Fatalf("network description = %#v", summary)
 	}
 
@@ -204,5 +204,36 @@ func TestJSONModeSuppressesDevelopmentAccounts(t *testing.T) {
 	printDevelopmentAccounts(&output, cfg)
 	if !strings.Contains(output.String(), "Unlocked development accounts") {
 		t.Fatal("human startup output omitted development accounts")
+	}
+}
+
+func TestAmsterdamConfigurationPrecedenceAndDescription(t *testing.T) {
+	cfg, err := effectiveConfig(commandContext(t))
+	if err != nil || cfg.Chain.Forks.AmsterdamEpoch != 0 || configuredFork(cfg) != "gloas" {
+		t.Fatalf("default Amsterdam: %#v %v", cfg.Chain, err)
+	}
+	path := filepath.Join(t.TempDir(), "fork.toml")
+	if err := os.WriteFile(path, []byte("[chain.forks]\namsterdam_epoch = 2\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = effectiveConfig(commandContext(t, "--config", path))
+	if err != nil || cfg.Chain.Forks.AmsterdamEpoch != 2 {
+		t.Fatalf("TOML Amsterdam: %#v %v", cfg.Chain, err)
+	}
+	t.Setenv("ETHERTEST_AMSTERDAM_EPOCH", "-1")
+	cfg, err = effectiveConfig(commandContext(t, "--config", path))
+	if err != nil || cfg.Chain.Forks.AmsterdamEpoch != -1 {
+		t.Fatalf("env Amsterdam: %#v %v", cfg.Chain, err)
+	}
+	cfg, err = effectiveConfig(commandContext(t, "--config", path, "--amsterdam-epoch", "1"))
+	if err != nil || cfg.Chain.Forks.AmsterdamEpoch != 1 {
+		t.Fatalf("CLI Amsterdam: %#v %v", cfg.Chain, err)
+	}
+	summary := networkDescription(cfg)
+	if summary["forkEpochs"].(map[string]any)["amsterdam"] != int64(1) || summary["beaconApi"] != "gloas-subset" {
+		t.Fatalf("network description: %#v", summary)
+	}
+	if _, err := effectiveConfig(commandContext(t, "--amsterdam-epoch", "-2")); err == nil {
+		t.Fatal("invalid Amsterdam epoch accepted")
 	}
 }

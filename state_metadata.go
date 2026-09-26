@@ -12,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
-const currentMetadataFormat = 2
+const currentMetadataFormat = 3
 
 var (
 	stateSchemaKey      = []byte("ethertest/meta/schema-version")

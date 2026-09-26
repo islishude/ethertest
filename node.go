@@ -811,7 +811,7 @@ func (n *Node) mineExecutionBlock(ctx context.Context, chain *executionChain, em
 		return nil, nil, errors.New("block builder did not return an isolated candidate state")
 	}
 	_, root, err := candidate.commit(
-		postState, block.NumberU64(), true, chain.config.IsCancun(block.Number(), block.Time()),
+		postState, block.NumberU64(), chain.config.Rules(block.Number(), true, block.Time()),
 	)
 	if err != nil {
 		return nil, nil, err

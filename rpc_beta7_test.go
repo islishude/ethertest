@@ -28,7 +28,7 @@ import (
 var beta7ImplementedMethods = []string{
 	"debug_getRawBlock", "debug_getRawHeader", "debug_getRawReceipts", "debug_getRawTransaction",
 	"eth_accounts", "eth_blobBaseFee", "eth_blockNumber", "eth_call", "eth_capabilities", "eth_chainId",
-	"eth_coinbase", "eth_config", "eth_createAccessList", "eth_estimateGas", "eth_feeHistory", "eth_gasPrice",
+	"eth_getBlockAccessList", "debug_getRawBlockAccessList", "eth_coinbase", "eth_config", "eth_createAccessList", "eth_estimateGas", "eth_feeHistory", "eth_gasPrice",
 	"eth_getBalance", "eth_getBlockByHash", "eth_getBlockByNumber", "eth_getBlockReceipts",
 	"eth_getBlockTransactionCountByHash", "eth_getBlockTransactionCountByNumber", "eth_getCode",
 	"eth_getFilterChanges", "eth_getFilterLogs", "eth_getLogs", "eth_getProof", "eth_getStorageAt",
@@ -40,7 +40,7 @@ var beta7ImplementedMethods = []string{
 }
 
 var beta7ExcludedMethods = []string{
-	"debug_getBadBlocks", "debug_getRawBlockAccessList",
+	"debug_getBadBlocks",
 	"engine_exchangeCapabilities", "engine_exchangeTransitionConfigurationV1",
 	"engine_forkchoiceUpdatedV1", "engine_forkchoiceUpdatedV2", "engine_forkchoiceUpdatedV3", "engine_forkchoiceUpdatedV4",
 	"engine_getBlobsV1", "engine_getBlobsV2", "engine_getBlobsV3", "engine_getBlobsV4",
@@ -48,11 +48,11 @@ var beta7ExcludedMethods = []string{
 	"engine_getPayloadBodiesByRangeV1", "engine_getPayloadBodiesByRangeV2",
 	"engine_getPayloadV1", "engine_getPayloadV2", "engine_getPayloadV3", "engine_getPayloadV4", "engine_getPayloadV5", "engine_getPayloadV6",
 	"engine_newPayloadV1", "engine_newPayloadV2", "engine_newPayloadV3", "engine_newPayloadV4", "engine_newPayloadV5",
-	"eth_getBlockAccessList", "testing_buildBlockV1",
+	"testing_buildBlockV1",
 }
 
 func TestExecutionAPIBeta7RegistrationAudit(t *testing.T) {
-	if len(beta7ImplementedMethods) != 49 || len(beta7ExcludedMethods) != 29 {
+	if len(beta7ImplementedMethods) != 51 || len(beta7ExcludedMethods) != 27 {
 		t.Fatalf("audit lists have %d implemented and %d excluded methods", len(beta7ImplementedMethods), len(beta7ExcludedMethods))
 	}
 	node := startRPCNode(t, testConfig())

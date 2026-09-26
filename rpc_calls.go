@@ -8,7 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/state"
+	statepkg "github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -50,7 +50,7 @@ func (api *ethAPI) EstimateGas(ctx context.Context, args callArgs, selector *rpc
 	if err != nil {
 		return 0, err
 	}
-	low, high := uint64(21_000), header.GasLimit
+	low, high := uint64(0), header.GasLimit
 	if args.Gas != nil {
 		if uint64(*args.Gas) > api.node.cfg.Limits.RPCGasCap {
 			return 0, newResourceLimitError("RPC gas", uint64(*args.Gas), api.node.cfg.Limits.RPCGasCap)
@@ -100,7 +100,7 @@ func (api *ethAPI) executeCallWithTracer(ctx context.Context, args callArgs, sel
 	return api.executeCallAt(ctx, args, header, state, gasOverride, overrides, hooks)
 }
 
-func (api *ethAPI) executeCallAt(ctx context.Context, args callArgs, header *types.Header, state *state.StateDB, gasOverride uint64, overrides *stateOverride, hooks *tracing.Hooks) (*core.ExecutionResult, error) {
+func (api *ethAPI) executeCallAt(ctx context.Context, args callArgs, header *types.Header, state *statepkg.StateDB, gasOverride uint64, overrides *stateOverride, hooks *tracing.Hooks) (*core.ExecutionResult, error) {
 	if err := args.validateData(); err != nil {
 		return nil, &invalidParamsError{message: err.Error()}
 	}
@@ -222,11 +222,43 @@ func (api *ethAPI) executeCallAt(ctx context.Context, args callArgs, header *typ
 		SkipNonceChecks:       true, SkipTransactionChecks: true,
 	}
 	blockContext := core.NewEVMBlockContext(header, api.node.chain.blockchain, nil)
-	evm := vm.NewEVM(blockContext, state, api.node.chain.config, vm.Config{NoBaseFee: true, Tracer: hooks})
+	var evmState vm.StateDB = state
+	if hooks != nil {
+		evmState = statepkg.NewHookedState(state, hooks)
+	}
+	evm := vm.NewEVM(blockContext, evmState, api.node.chain.config, vm.Config{NoBaseFee: true, Tracer: hooks})
+	defer evm.Release()
 	evm.SetTxContext(core.NewEVMTxContext(message))
 	stop := context.AfterFunc(ctx, evm.Cancel)
 	defer stop()
+	if hooks != nil && hooks.OnTxStart != nil {
+		traceArgs := args
+		traceArgs.Gas, traceArgs.Nonce = new(hexutil.Uint64(gas)), new(hexutil.Uint64(nonce))
+		traceArgs.Value = (*hexutil.Big)(value)
+		traceArgs.GasPrice = (*hexutil.Big)(gasPrice)
+		traceArgs.MaxFeePerGas, traceArgs.MaxPriorityFeePerGas = (*hexutil.Big)(feeCap), (*hexutil.Big)(tipCap)
+		traceArgs.BlobFeeCap = (*hexutil.Big)(blobFeeCap)
+		txType, typeErr := transactionType(args)
+		if typeErr != nil {
+			return nil, typeErr
+		}
+		if (txType == types.BlobTxType || txType == types.SetCodeTxType) && args.To == nil {
+			return nil, &invalidParamsError{message: "transaction type requires a recipient"}
+		}
+		tx, txErr := makeUnsignedTransaction(txType, &traceArgs, api.node.chain.config.ChainID)
+		if txErr != nil {
+			return nil, txErr
+		}
+		hooks.OnTxStart(evm.GetVMContext(), tx, from)
+	}
 	result, err := core.ApplyMessage(evm, message, core.NewGasPool(gas))
+	if hooks != nil && hooks.OnTxEnd != nil {
+		var receipt *types.Receipt
+		if result != nil {
+			receipt = &types.Receipt{GasUsed: result.UsedGas}
+		}
+		hooks.OnTxEnd(receipt, err)
+	}
 	if evm.Cancelled() || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return nil, &rpcTimeoutError{message: "RPC execution timed out"}
 	}

@@ -108,7 +108,7 @@ func (n *Node) MineBranch(ctx context.Context, name string, count uint64) ([]com
 				return nil, err
 			}
 			_, root, err := candidate.commit(
-				postState, block.NumberU64(), true, chain.config.IsCancun(block.Number(), block.Time()),
+				postState, block.NumberU64(), chain.config.Rules(block.Number(), true, block.Time()),
 			)
 			if err != nil {
 				return nil, err

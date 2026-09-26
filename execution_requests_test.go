@@ -128,7 +128,7 @@ func TestExecutionRequestControlsUpdatePendingBeaconAndSafety(t *testing.T) {
 	if signed.electra == nil || signed.electra.Message == nil || signed.electra.Message.Body == nil {
 		t.Fatal("Electra Beacon projection is incomplete")
 	}
-	projected, err := marshalExecutionRequests(signed.electra.Message.Body.ExecutionRequests)
+	projected, err := marshalExecutionRequests(requestsFromElectra(signed.electra.Message.Body.ExecutionRequests))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,11 +151,11 @@ func TestExecutionRequestControlsUpdatePendingBeaconAndSafety(t *testing.T) {
 	if err := sszBlock.UnmarshalSSZ(sszData); err != nil {
 		t.Fatal(err)
 	}
-	jsonRequests, err := marshalExecutionRequests(jsonBlock.Message.Body.ExecutionRequests)
+	jsonRequests, err := marshalExecutionRequests(requestsFromElectra(jsonBlock.Message.Body.ExecutionRequests))
 	if err != nil {
 		t.Fatal(err)
 	}
-	sszRequests, err := marshalExecutionRequests(sszBlock.Message.Body.ExecutionRequests)
+	sszRequests, err := marshalExecutionRequests(requestsFromElectra(sszBlock.Message.Body.ExecutionRequests))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,126 +398,142 @@ func TestExecutionRequestParsingCapacityAndOrdering(t *testing.T) {
 }
 
 func TestNativeExecutionRequestsFromDeveloperPredeploysAndDepositLogs(t *testing.T) {
-	cfg := testConfig()
-	cfg.Mining.Mode = miningModeManual
-	node, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := node.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer node.Close() //nolint:errcheck
-	account := testWalletAccount(t, node, 0)
-
-	runtime := depositLogRuntime()
-	creation := contractCreationCode(runtime)
-	deploy := signExecutionRequestTransaction(t, cfg, account, 0, nil, new(big.Int), creation, 500_000)
-	if _, err := node.SendTransaction(context.Background(), deploy); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := node.Mine(context.Background(), 1, false); err != nil {
-		t.Fatal(err)
-	}
-	depositAddress := crypto.CreateAddress(account.Address, 0)
-	state, err := node.chain.blockchain.State()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if code := state.GetCode(depositAddress); !bytes.Equal(code, runtime) {
-		t.Fatalf("deposit event contract code = %x, want %x", code, runtime)
-	}
-	deposit, _, _ := testExecutionRequests()
-	depositData := depositLogData(t, deposit)
-	unconfigured := signExecutionRequestTransaction(t, cfg, account, 1, &depositAddress, new(big.Int), depositData, 250_000)
-	if _, err := node.SendTransaction(context.Background(), unconfigured); err != nil {
-		t.Fatal(err)
-	}
-	unconfiguredHashes, err := node.Mine(context.Background(), 1, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	unconfiguredRecord, exists, err := loadExecutionRequestRecord(node.chain, unconfiguredHashes[0])
-	if err != nil || !exists || len(unconfiguredRecord.Requests) != 0 {
-		t.Fatalf("unconfigured deposit address produced requests: record=%#v exists=%v err=%v", unconfiguredRecord, exists, err)
-	}
-	node.chain.config.DepositContractAddress = depositAddress
-	node.chain.blockchain.Config().DepositContractAddress = depositAddress
-
-	withdrawalPubkey := bytes.Repeat([]byte{0x51}, 48)
-	withdrawalAmount := make([]byte, 8)
-	binary.BigEndian.PutUint64(withdrawalAmount, 3456)
-	withdrawalData := append(append([]byte(nil), withdrawalPubkey...), withdrawalAmount...)
-	sourcePubkey := bytes.Repeat([]byte{0x61}, 48)
-	targetPubkey := bytes.Repeat([]byte{0x71}, 48)
-	consolidationData := append(append([]byte(nil), sourcePubkey...), targetPubkey...)
-	transactions := []*types.Transaction{
-		signExecutionRequestTransaction(t, cfg, account, 2, &depositAddress, new(big.Int), depositData, 250_000),
-		signExecutionRequestTransaction(t, cfg, account, 3, addressPointer(params.WithdrawalQueueAddress), big.NewInt(params.GWei), withdrawalData, 500_000),
-		signExecutionRequestTransaction(t, cfg, account, 4, addressPointer(params.ConsolidationQueueAddress), big.NewInt(params.GWei), consolidationData, 500_000),
-	}
-	for _, transaction := range transactions {
-		if _, err := node.SendTransaction(context.Background(), transaction); err != nil {
-			t.Fatal(err)
+	for _, activation := range []int64{-1, 0} {
+		name := "osaka"
+		if activation == 0 {
+			name = "amsterdam"
 		}
-	}
-	hashes, err := node.Mine(context.Background(), 1, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	block := node.chain.blockchain.GetBlockByHash(hashes[0])
-	record, exists, err := loadExecutionRequestRecord(node.chain, block.Hash())
-	if err != nil || !exists {
-		t.Fatalf("load native request record: exists=%v err=%v", exists, err)
-	}
-	if len(record.Controls.Deposits)+len(record.Controls.Withdrawals)+len(record.Controls.Consolidations) != 0 {
-		t.Fatalf("native block recorded synthetic controls: %#v", record.Controls)
-	}
-	if len(record.Requests) != 3 || record.Requests[0][0] != executionRequestDeposit ||
-		record.Requests[1][0] != executionRequestWithdrawal || record.Requests[2][0] != executionRequestConsolidation {
-		t.Fatalf("native request groups = %x", record.Requests)
-	}
-	parsed, err := parseExecutionRequests(record.Requests)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(parsed.Deposits) != 1 || len(parsed.Withdrawals) != 1 || len(parsed.Consolidations) != 1 {
-		t.Fatalf("native execution requests = %#v", parsed)
-	}
-	if uint64(parsed.Deposits[0].Amount) != deposit.Amount || parsed.Deposits[0].Index != deposit.Index ||
-		!bytes.Equal(parsed.Deposits[0].Pubkey[:], deposit.Pubkey[:]) ||
-		!bytes.Equal(parsed.Deposits[0].WithdrawalCredentials, deposit.WithdrawalCredentials[:]) ||
-		!bytes.Equal(parsed.Deposits[0].Signature[:], deposit.Signature[:]) {
-		t.Fatalf("native deposit = %#v", parsed.Deposits[0])
-	}
-	if common.Address(parsed.Withdrawals[0].SourceAddress) != account.Address ||
-		!bytes.Equal(parsed.Withdrawals[0].ValidatorPubkey[:], withdrawalPubkey) ||
-		uint64(parsed.Withdrawals[0].Amount) != 3456 {
-		t.Fatalf("native withdrawal = %#v", parsed.Withdrawals[0])
-	}
-	if common.Address(parsed.Consolidations[0].SourceAddress) != account.Address ||
-		!bytes.Equal(parsed.Consolidations[0].SourcePubkey[:], sourcePubkey) ||
-		!bytes.Equal(parsed.Consolidations[0].TargetPubkey[:], targetPubkey) {
-		t.Fatalf("native consolidation = %#v", parsed.Consolidations[0])
-	}
-	assertExecutionRequestHash(t, block, record.Requests)
-	signed, err := node.consensus.signedBlock(node.chain, block)
-	if err != nil {
-		t.Fatal(err)
-	}
-	projected, err := marshalExecutionRequests(signed.electra.Message.Body.ExecutionRequests)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !equalExecutionRequestBytes(projected, record.Requests) {
-		t.Fatal("native Beacon projection diverged from geth requests")
-	}
-	safety, err := node.BlockSafety(block.Hash())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if safety.Tainted || node.SafetyStatus().SessionTainted {
-		t.Fatalf("native-only block was tainted: block=%#v status=%#v", safety, node.SafetyStatus())
+		t.Run(name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Chain.Forks.AmsterdamEpoch = activation
+			cfg.Mining.Mode = miningModeManual
+			node, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := node.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer node.Close() //nolint:errcheck
+			account := testWalletAccount(t, node, 0)
+
+			runtime := depositLogRuntime()
+			creation := contractCreationCode(runtime)
+			deploy := signExecutionRequestTransaction(t, cfg, account, 0, nil, new(big.Int), creation, 500_000)
+			if _, err := node.SendTransaction(context.Background(), deploy); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := node.Mine(context.Background(), 1, false); err != nil {
+				t.Fatal(err)
+			}
+			depositAddress := crypto.CreateAddress(account.Address, 0)
+			state, err := node.chain.blockchain.State()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if code := state.GetCode(depositAddress); !bytes.Equal(code, runtime) {
+				t.Fatalf("deposit event contract code = %x, want %x", code, runtime)
+			}
+			deposit, _, _ := testExecutionRequests()
+			depositData := depositLogData(t, deposit)
+			unconfigured := signExecutionRequestTransaction(t, cfg, account, 1, &depositAddress, new(big.Int), depositData, 250_000)
+			if _, err := node.SendTransaction(context.Background(), unconfigured); err != nil {
+				t.Fatal(err)
+			}
+			unconfiguredHashes, err := node.Mine(context.Background(), 1, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			unconfiguredRecord, exists, err := loadExecutionRequestRecord(node.chain, unconfiguredHashes[0])
+			if err != nil || !exists || len(unconfiguredRecord.Requests) != 0 {
+				t.Fatalf("unconfigured deposit address produced requests: record=%#v exists=%v err=%v", unconfiguredRecord, exists, err)
+			}
+			node.chain.config.DepositContractAddress = depositAddress
+			node.chain.blockchain.Config().DepositContractAddress = depositAddress
+
+			withdrawalPubkey := bytes.Repeat([]byte{0x51}, 48)
+			withdrawalAmount := make([]byte, 8)
+			binary.BigEndian.PutUint64(withdrawalAmount, 3456)
+			withdrawalData := append(append([]byte(nil), withdrawalPubkey...), withdrawalAmount...)
+			sourcePubkey := bytes.Repeat([]byte{0x61}, 48)
+			targetPubkey := bytes.Repeat([]byte{0x71}, 48)
+			consolidationData := append(append([]byte(nil), sourcePubkey...), targetPubkey...)
+			transactions := []*types.Transaction{
+				signExecutionRequestTransaction(t, cfg, account, 2, &depositAddress, new(big.Int), depositData, 250_000),
+				signExecutionRequestTransaction(t, cfg, account, 3, addressPointer(params.WithdrawalQueueAddress), big.NewInt(params.GWei), withdrawalData, 2_000_000),
+				signExecutionRequestTransaction(t, cfg, account, 4, addressPointer(params.ConsolidationQueueAddress), big.NewInt(params.GWei), consolidationData, 2_000_000),
+			}
+			for _, transaction := range transactions {
+				if _, err := node.SendTransaction(context.Background(), transaction); err != nil {
+					t.Fatal(err)
+				}
+			}
+			hashes, err := node.Mine(context.Background(), 1, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			block := node.chain.blockchain.GetBlockByHash(hashes[0])
+			record, exists, err := loadExecutionRequestRecord(node.chain, block.Hash())
+			if err != nil || !exists {
+				t.Fatalf("load native request record: exists=%v err=%v", exists, err)
+			}
+			if len(record.Controls.Deposits)+len(record.Controls.Withdrawals)+len(record.Controls.Consolidations) != 0 {
+				t.Fatalf("native block recorded synthetic controls: %#v", record.Controls)
+			}
+			if len(record.Requests) != 3 || record.Requests[0][0] != executionRequestDeposit ||
+				record.Requests[1][0] != executionRequestWithdrawal || record.Requests[2][0] != executionRequestConsolidation {
+				t.Fatalf("native request groups = %x", record.Requests)
+			}
+			parsed, err := parseExecutionRequests(record.Requests)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(parsed.Deposits) != 1 || len(parsed.Withdrawals) != 1 || len(parsed.Consolidations) != 1 {
+				t.Fatalf("native execution requests = %#v", parsed)
+			}
+			if uint64(parsed.Deposits[0].Amount) != deposit.Amount || parsed.Deposits[0].Index != deposit.Index ||
+				!bytes.Equal(parsed.Deposits[0].Pubkey[:], deposit.Pubkey[:]) ||
+				!bytes.Equal(parsed.Deposits[0].WithdrawalCredentials, deposit.WithdrawalCredentials[:]) ||
+				!bytes.Equal(parsed.Deposits[0].Signature[:], deposit.Signature[:]) {
+				t.Fatalf("native deposit = %#v", parsed.Deposits[0])
+			}
+			if common.Address(parsed.Withdrawals[0].SourceAddress) != account.Address ||
+				!bytes.Equal(parsed.Withdrawals[0].ValidatorPubkey[:], withdrawalPubkey) ||
+				uint64(parsed.Withdrawals[0].Amount) != 3456 {
+				t.Fatalf("native withdrawal = %#v", parsed.Withdrawals[0])
+			}
+			if common.Address(parsed.Consolidations[0].SourceAddress) != account.Address ||
+				!bytes.Equal(parsed.Consolidations[0].SourcePubkey[:], sourcePubkey) ||
+				!bytes.Equal(parsed.Consolidations[0].TargetPubkey[:], targetPubkey) {
+				t.Fatalf("native consolidation = %#v", parsed.Consolidations[0])
+			}
+			assertExecutionRequestHash(t, block, record.Requests)
+			signed, err := node.consensus.signedBlock(node.chain, block)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var projectionRequests *executionRequests
+			if signed.gloas != nil {
+				projectionRequests = signed.envelope.Message.ExecutionRequests
+				assertAmsterdamReplay(t, node, block)
+			} else {
+				projectionRequests = requestsFromElectra(signed.electra.Message.Body.ExecutionRequests)
+			}
+			projected, err := marshalExecutionRequests(projectionRequests)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !equalExecutionRequestBytes(projected, record.Requests) {
+				t.Fatal("native Beacon projection diverged from geth requests")
+			}
+			safety, err := node.BlockSafety(block.Hash())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if safety.Tainted || node.SafetyStatus().SessionTainted {
+				t.Fatalf("native-only block was tainted: block=%#v status=%#v", safety, node.SafetyStatus())
+			}
+		})
 	}
 }
 
@@ -724,90 +740,100 @@ func TestNativeCapacityDefersControlUntilFollowingBlock(t *testing.T) {
 }
 
 func TestExecutionRequestControlReorgRestoresFIFOAndTemporaryOverflow(t *testing.T) {
-	cfg := testConfig()
-	cfg.Mining.Mode = miningModeManual
-	node, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := node.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer node.Close() //nolint:errcheck
-	if err := node.CreateBranch(context.Background(), "genesis", 0); err != nil {
-		t.Fatal(err)
-	}
-	_, request, _ := testExecutionRequests()
-	request.Amount = 1
-	if err := node.AddWithdrawalRequest(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-	originalHashes, err := node.Mine(context.Background(), 1, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := node.CreateBranch(context.Background(), "original", 1); err != nil {
-		t.Fatal(err)
-	}
-	for index := range maxWithdrawalRequestsPerPayload {
-		request.Amount = uint64(index + 2)
-		if err := node.AddWithdrawalRequest(context.Background(), request); err != nil {
-			t.Fatal(err)
+	for _, activation := range []int64{-1, 0} {
+		name := "osaka"
+		if activation == 0 {
+			name = "amsterdam"
 		}
-	}
-	if len(node.pendingExecutionRequests.Withdrawals) != maxWithdrawalRequestsPerPayload {
-		t.Fatal("test did not fill the control queue")
-	}
-	branchHashes, err := node.MineBranch(context.Background(), "genesis", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(node.pendingExecutionRequests.Withdrawals) != maxWithdrawalRequestsPerPayload {
-		t.Fatal("non-canonical branch mining consumed controls")
-	}
-	branchRecord, exists, err := loadExecutionRequestRecord(node.chain, branchHashes[0])
-	if err != nil || !exists || len(branchRecord.Controls.Withdrawals) != 0 {
-		t.Fatalf("branch request record = %#v exists=%v err=%v", branchRecord, exists, err)
-	}
-	if err := node.SwitchBranch(context.Background(), "genesis"); err != nil {
-		t.Fatal(err)
-	}
-	assertQueuedExecutionRequestIDRange(t, node.pendingExecutionRequests.Withdrawals, 1, 17)
+		t.Run(name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Chain.Forks.AmsterdamEpoch = activation
+			cfg.Mining.Mode = miningModeManual
+			node, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := node.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer node.Close() //nolint:errcheck
+			if err := node.CreateBranch(context.Background(), "genesis", 0); err != nil {
+				t.Fatal(err)
+			}
+			_, request, _ := testExecutionRequests()
+			request.Amount = 1
+			if err := node.AddWithdrawalRequest(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			originalHashes, err := node.Mine(context.Background(), 1, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := node.CreateBranch(context.Background(), "original", 1); err != nil {
+				t.Fatal(err)
+			}
+			for index := range maxWithdrawalRequestsPerPayload {
+				request.Amount = uint64(index + 2)
+				if err := node.AddWithdrawalRequest(context.Background(), request); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if len(node.pendingExecutionRequests.Withdrawals) != maxWithdrawalRequestsPerPayload {
+				t.Fatal("test did not fill the control queue")
+			}
+			branchHashes, err := node.MineBranch(context.Background(), "genesis", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(node.pendingExecutionRequests.Withdrawals) != maxWithdrawalRequestsPerPayload {
+				t.Fatal("non-canonical branch mining consumed controls")
+			}
+			branchRecord, exists, err := loadExecutionRequestRecord(node.chain, branchHashes[0])
+			if err != nil || !exists || len(branchRecord.Controls.Withdrawals) != 0 {
+				t.Fatalf("branch request record = %#v exists=%v err=%v", branchRecord, exists, err)
+			}
+			if err := node.SwitchBranch(context.Background(), "genesis"); err != nil {
+				t.Fatal(err)
+			}
+			assertQueuedExecutionRequestIDRange(t, node.pendingExecutionRequests.Withdrawals, 1, 17)
 
-	firstAlternative, err := node.Mine(context.Background(), 1, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertQueuedExecutionRequestIDs(t, node.pendingExecutionRequests.Withdrawals, 17)
-	firstRecord, exists, err := loadExecutionRequestRecord(node.chain, firstAlternative[0])
-	if err != nil || !exists || len(firstRecord.Controls.Withdrawals) != maxWithdrawalRequestsPerPayload {
-		t.Fatalf("overflow drain record = %#v exists=%v err=%v", firstRecord, exists, err)
-	}
-	if _, err := node.Mine(context.Background(), 1, true); err != nil {
-		t.Fatal(err)
-	}
-	if !node.pendingExecutionRequests.empty() {
-		t.Fatal("temporary overflow did not drain across two blocks")
-	}
+			firstAlternative, err := node.Mine(context.Background(), 1, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertQueuedExecutionRequestIDs(t, node.pendingExecutionRequests.Withdrawals, 17)
+			firstRecord, exists, err := loadExecutionRequestRecord(node.chain, firstAlternative[0])
+			if err != nil || !exists || len(firstRecord.Controls.Withdrawals) != maxWithdrawalRequestsPerPayload {
+				t.Fatalf("overflow drain record = %#v exists=%v err=%v", firstRecord, exists, err)
+			}
+			if _, err := node.Mine(context.Background(), 1, true); err != nil {
+				t.Fatal(err)
+			}
+			if !node.pendingExecutionRequests.empty() {
+				t.Fatal("temporary overflow did not drain across two blocks")
+			}
 
-	revision := node.Revision()
-	if err := node.SwitchBranch(context.Background(), "original"); err != nil {
-		t.Fatal(err)
-	}
-	if head := node.chain.blockchain.CurrentBlock().Hash(); head != originalHashes[0] {
-		t.Fatalf("switched head = %s, want %s", head, originalHashes[0])
-	}
-	assertQueuedExecutionRequestIDs(t, node.pendingExecutionRequests.Withdrawals,
-		2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
-	)
-	events, err := node.EventsSince(revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 5 || !events[0].Removed || !events[1].Removed || !events[2].Removed ||
-		events[0].BlockNumber != 3 || events[1].BlockNumber != 2 || events[2].BlockNumber != 1 ||
-		events[3].Removed || events[3].BlockHash != originalHashes[0] || events[4].Type != "chain_reorg" {
-		t.Fatalf("reorg publication order = %#v", events)
+			revision := node.Revision()
+			if err := node.SwitchBranch(context.Background(), "original"); err != nil {
+				t.Fatal(err)
+			}
+			if head := node.chain.blockchain.CurrentBlock().Hash(); head != originalHashes[0] {
+				t.Fatalf("switched head = %s, want %s", head, originalHashes[0])
+			}
+			assertQueuedExecutionRequestIDs(t, node.pendingExecutionRequests.Withdrawals,
+				2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+			)
+			events, err := node.EventsSince(revision)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != 5 || !events[0].Removed || !events[1].Removed || !events[2].Removed ||
+				events[0].BlockNumber != 3 || events[1].BlockNumber != 2 || events[2].BlockNumber != 1 ||
+				events[3].Removed || events[3].BlockHash != originalHashes[0] || events[4].Type != "chain_reorg" {
+				t.Fatalf("reorg publication order = %#v", events)
+			}
+
+		})
 	}
 }
 
@@ -980,42 +1006,52 @@ func TestExecutionRequestSnapshotRestoresConsumedAndKeepsLaterPending(t *testing
 }
 
 func TestExecutionRequestCheckpointRepeatablyRestoresControls(t *testing.T) {
-	cfg := testConfig()
-	cfg.Mining.Mode = miningModeManual
-	node, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := node.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer node.Close() //nolint:errcheck
-	if err := node.Checkpoint(context.Background(), "base"); err != nil {
-		t.Fatal(err)
-	}
-	_, request, _ := testExecutionRequests()
-	request.Amount = 1
-	if err := node.AddWithdrawalRequest(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := node.Mine(context.Background(), 1, true); err != nil {
-		t.Fatal(err)
-	}
-	request.Amount = 2
-	if err := node.AddWithdrawalRequest(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-	for attempt := range 2 {
-		if err := node.Restore(context.Background(), "base"); err != nil {
-			t.Fatal(err)
+	for _, activation := range []int64{-1, 0} {
+		name := "osaka"
+		if activation == 0 {
+			name = "amsterdam"
 		}
-		assertQueuedExecutionRequestIDs(t, node.pendingExecutionRequests.Withdrawals, 1, 2)
-		if _, err := node.Mine(context.Background(), 1, true); err != nil {
-			t.Fatal(err)
-		}
-		if !node.pendingExecutionRequests.empty() {
-			t.Fatalf("checkpoint attempt %d did not consume restored controls", attempt)
-		}
+		t.Run(name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Chain.Forks.AmsterdamEpoch = activation
+			cfg.Mining.Mode = miningModeManual
+			node, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := node.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer node.Close() //nolint:errcheck
+			if err := node.Checkpoint(context.Background(), "base"); err != nil {
+				t.Fatal(err)
+			}
+			_, request, _ := testExecutionRequests()
+			request.Amount = 1
+			if err := node.AddWithdrawalRequest(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := node.Mine(context.Background(), 1, true); err != nil {
+				t.Fatal(err)
+			}
+			request.Amount = 2
+			if err := node.AddWithdrawalRequest(context.Background(), request); err != nil {
+				t.Fatal(err)
+			}
+			for attempt := range 2 {
+				if err := node.Restore(context.Background(), "base"); err != nil {
+					t.Fatal(err)
+				}
+				assertQueuedExecutionRequestIDs(t, node.pendingExecutionRequests.Withdrawals, 1, 2)
+				if _, err := node.Mine(context.Background(), 1, true); err != nil {
+					t.Fatal(err)
+				}
+				if !node.pendingExecutionRequests.empty() {
+					t.Fatalf("checkpoint attempt %d did not consume restored controls", attempt)
+				}
+			}
+
+		})
 	}
 }
 
@@ -1147,6 +1183,14 @@ func TestPrePragueIntervalMiningQueuesUntilExactBoundary(t *testing.T) {
 		t.Fatal("pre-Prague pending block has a requests hash")
 	}
 	waitForHead(t, node, cfg.Chain.SlotsPerEpoch)
+	// A geth head can be visible before the controller finishes the auxiliary
+	// commit. Read controller-owned queues only after that operation completes.
+	empty, err := node.executeWrite(t.Context(), func(*executionChain) (any, error) {
+		return node.pendingExecutionRequests.empty(), nil
+	})
+	if err != nil || !empty.(bool) {
+		t.Fatalf("Prague boundary queue: empty=%v err=%v", empty, err)
+	}
 	for number := uint64(1); number < cfg.Chain.SlotsPerEpoch; number++ {
 		if hash := node.chain.blockchain.GetBlockByNumber(number).RequestsHash(); hash != nil {
 			t.Fatalf("pre-Prague block %d has requests hash %s", number, *hash)
@@ -1156,9 +1200,6 @@ func TestPrePragueIntervalMiningQueuesUntilExactBoundary(t *testing.T) {
 	record, exists, err := loadExecutionRequestRecord(node.chain, boundary.Hash())
 	if err != nil || !exists || len(record.Controls.Withdrawals) != 1 {
 		t.Fatalf("Prague boundary record = %#v exists=%v err=%v", record, exists, err)
-	}
-	if !node.pendingExecutionRequests.empty() {
-		t.Fatal("Prague boundary did not consume the queued control")
 	}
 }
 

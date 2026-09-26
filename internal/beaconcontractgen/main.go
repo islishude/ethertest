@@ -59,6 +59,7 @@ func main() {
 	}
 	requiredPaths := []string{
 		"/eth/v2/beacon/blocks/{block_id}",
+		"/eth/v1/beacon/execution_payload_envelopes/{block_id}",
 		"/eth/v1/debug/beacon/data_column_sidecars/{block_id}",
 		"/eth/v1/beacon/states/{state_id}/validators",
 		"/eth/v1/beacon/states/{state_id}/validator_balances",
@@ -91,6 +92,7 @@ func main() {
 
 	var output bytes.Buffer
 	fmt.Fprintf(&output, "// Code generated from %s; DO NOT EDIT.\n\npackage ethertest\n\n", specPath)
+	writeRequest(&output, "BeaconExecutionPayloadEnvelopeRequest", requestParameters(contract, "/eth/v1/beacon/execution_payload_envelopes/{block_id}"))
 	writeRequest(&output, "BeaconBlockRequest", requestParameters(contract, "/eth/v2/beacon/blocks/{block_id}"))
 	writeRequest(&output, "BeaconDataColumnSidecarsRequest", requestParameters(contract, "/eth/v1/debug/beacon/data_column_sidecars/{block_id}"))
 	writeRequest(&output, "BeaconValidatorsRequest", requestParameters(contract, "/eth/v1/beacon/states/{state_id}/validators"))
