@@ -396,7 +396,7 @@ rpcTest('viem typed public and wallet actions exercise the canonical RPC path', 
 
   const rawHash = await publicClient.sendRawTransaction({ serializedTransaction: signedTransaction })
   assert(isHash(rawHash))
-  const mined = await rpc('evm_mine', ['0x1'])
+  const mined = await rpc('ethertest_mine', ['0x1'])
   assert.equal(mined.length, 1)
   const latest = await publicClient.getBlock({ blockTag: 'latest', includeTransactions: true })
   assert.equal(latest.number, 1n)
@@ -443,7 +443,7 @@ rpcTest('viem typed public and wallet actions exercise the canonical RPC path', 
     authorizationList: [authorization],
     to: account0.address,
   })
-  await rpc('evm_mine', ['0x1'])
+  await rpc('ethertest_mine', ['0x1'])
   const authorizationReceipt = await publicClient.getTransactionReceipt({ hash: authorizationHash })
   assert.equal(authorizationReceipt.status, 'success')
   assert.equal(authorizationReceipt.type, 'eip7702')
@@ -486,7 +486,7 @@ rpcTest('viem typed public and wallet actions exercise the canonical RPC path', 
     authorizationList: [selfAuthorization],
     to: account0.address,
   })
-  await rpc('evm_mine', ['0x1'])
+  await rpc('ethertest_mine', ['0x1'])
   assert.equal(
     (await publicClient.getTransactionReceipt({ hash: selfAuthorizationHash })).status,
     'success',
@@ -542,7 +542,7 @@ rpcTest('cast typed commands and raw RPC calls exercise the CLI compatibility pa
   )
   const castHash = sent.startsWith('{') ? JSON.parse(sent).transactionHash : sent.replaceAll('"', '')
   assert(isHash(castHash))
-  await castRpc('evm_mine', ['0x1'])
+  await castRpc('ethertest_mine', ['0x1'])
   const receipt = JSON.parse(await cast('receipt', castHash, '--rpc-url', rpcUrl, '--json'))
   assert.equal(receipt.status, '0x1')
   assert.equal(
@@ -623,16 +623,16 @@ rpcTest('HTTP batching, WebSocket newHeads, extensions, and canonical errors are
       rejectHead(error)
     },
   })
-  await rpc('evm_mine', ['0x1'])
+  await rpc('ethertest_mine', ['0x1'])
   const head = await headPromise
   assert.equal(BigInt(head.number), beforeBlock + 1n)
   await subscription.unsubscribe()
   ;(await wsClient.transport.getRpcClient()).close()
 
   const snapshot = await rpc('evm_snapshot')
-  await rpc('evm_mine', ['0x1'])
+  await rpc('ethertest_mine', ['0x1'])
   assert.equal(await rpc('evm_revert', [snapshot]), true)
-  const setBalanceBlock = await rpc('anvil_setBalance', [account3, '0x2a'])
+  const setBalanceBlock = await rpc('ethertest_setBalance', [account3, '0x2a'])
   assert(isHash(setBalanceBlock))
   assert.equal(await publicClient.getBalance({ address: account3 }), 42n)
 
@@ -668,7 +668,7 @@ rpcTest('synthetic finality pause and resume stays consistent through the real C
 
   const missed = await rpc('ethertest_missSlots', ['0x11'])
   assert.equal(missed.length, 17)
-  await rpc('evm_mine', ['0x1'])
+  await rpc('ethertest_mine', ['0x1'])
   const advanced = await rpc('ethertest_finalityStatus')
   assert.equal(advanced.paused, true)
   assert(advanced.current_slot > advanced.finality_slot)

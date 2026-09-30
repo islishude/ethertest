@@ -8,6 +8,9 @@ services:
     image: ethertest:local
     init: true
     # Amsterdam/Gloas is the default; v1/v2 volumes require a fresh chain.
+    # Anvil compatibility is partial: control setters mine blocks; time stays slot-based.
+    # --host/--port may replace --http, but must not be combined with it.
+    # --dump-state writes the native ethertest v3 archive, not Anvil state.
     command:
       - --amsterdam-epoch
       - "0"

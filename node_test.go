@@ -592,7 +592,7 @@ func TestNewHeadsSubscriptionAndSequentialBatch(t *testing.T) {
 	var reverted bool
 	batch := []rpc.BatchElem{
 		{Method: "evm_snapshot", Result: &snapshot},
-		{Method: "evm_mine", Result: &mined},
+		{Method: "ethertest_mine", Result: &mined},
 		{Method: "evm_revert", Args: []any{hexutil.Uint64(1)}, Result: &reverted},
 	}
 	if err := client.BatchCall(batch); err != nil {

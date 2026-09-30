@@ -9,3 +9,5 @@
 /testdata/vectors/execution-spec-tests-eip4788/timestamp_sequences.json text eol=lf
 /testdata/vectors/gloas/generate.py text eol=lf
 /testdata/vectors/gloas/vectors.json text eol=lf
+
+/specs/upstream/anvil-compatibility.json text eol=lf

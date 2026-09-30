@@ -9,10 +9,13 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/ethereum/go-ethereum/common"
@@ -50,6 +53,17 @@ func commonFlags() []cli.Flag {
 		&cli.Int64Flag{Name: "genesis-time"},
 		&cli.Int64Flag{Name: "amsterdam-epoch", Usage: "Amsterdam/Gloas activation epoch (0 at genesis, -1 disables)"},
 		&cli.StringFlag{Name: "http", Usage: "shared HTTP+WS listen address"},
+		&cli.StringFlag{Name: "host", Usage: "shared listener host (conflicts with --http)"},
+		&cli.UintFlag{Name: "port", Usage: "shared listener port (conflicts with --http)"},
+		&cli.IntFlag{Name: "accounts", Usage: "development account count (1-1024)"},
+		&cli.StringFlag{Name: "balance", Usage: "initial development account balance in whole ETH"},
+		&cli.StringFlag{Name: "mnemonic", Usage: "development account mnemonic"},
+		&cli.BoolFlag{Name: "no-mining", Usage: "manual mining"},
+		&cli.StringFlag{Name: "block-time", Usage: "wall-clock mining interval in seconds; timestamps remain slot-based"},
+		&cli.StringFlag{Name: "order", Usage: "transaction ordering: fees or fifo"},
+		&cli.Uint64Flag{Name: "gas-limit", Usage: "generated chain block gas limit"},
+		&cli.StringFlag{Name: "coinbase", Usage: "runtime fee recipient address"},
+		&cli.BoolFlag{Name: "quiet", Usage: "hide logs and development account banner"},
 		&cli.BoolFlag{Name: "no-http"},
 		&cli.StringFlag{Name: "ipc", Usage: "IPC socket or named-pipe path"},
 		&cli.BoolFlag{Name: "no-ipc"},
@@ -66,6 +80,12 @@ func commonFlags() []cli.Flag {
 func effectiveConfig(ctx *cli.Context) (ethertest.Config, error) {
 	if ctx.IsSet("ipc") && ctx.Bool("no-ipc") {
 		return ethertest.Config{}, errors.New("--ipc and --no-ipc cannot be used together")
+	}
+	if ctx.IsSet("http") && (ctx.IsSet("host") || ctx.IsSet("port")) {
+		return ethertest.Config{}, errors.New("--http conflicts with --host/--port")
+	}
+	if ctx.Bool("no-mining") && ctx.IsSet("block-time") {
+		return ethertest.Config{}, errors.New("--no-mining conflicts with --block-time")
 	}
 	cfg, err := ethertest.ReadConfig(ctx.String("config"))
 	if err != nil {
@@ -122,6 +142,60 @@ func effectiveConfig(ctx *cli.Context) (ethertest.Config, error) {
 	if ctx.IsSet("log-progress-interval") {
 		cfg.Log.ProgressInterval = ctx.Duration("log-progress-interval")
 	}
+	if ctx.IsSet("host") || ctx.IsSet("port") {
+		host, port, err := net.SplitHostPort(cfg.HTTP.Address)
+		if err != nil {
+			return ethertest.Config{}, err
+		}
+		if ctx.IsSet("host") {
+			host = ctx.String("host")
+		}
+		if ctx.IsSet("port") {
+			if ctx.Uint("port") > 65535 {
+				return ethertest.Config{}, errors.New("port exceeds 65535")
+			}
+			port = strconv.FormatUint(uint64(ctx.Uint("port")), 10)
+		}
+		cfg.HTTP.Address = net.JoinHostPort(host, port)
+	}
+	if ctx.IsSet("accounts") {
+		cfg.Accounts.Count = ctx.Int("accounts")
+	}
+	if ctx.IsSet("balance") {
+		balance := ctx.String("balance")
+		if balance == "" || strings.IndexFunc(balance, func(c rune) bool { return c < '0' || c > '9' }) >= 0 {
+			return ethertest.Config{}, errors.New("balance must be whole non-negative ETH")
+		}
+		cfg.Accounts.Balance = balance + "ether"
+	}
+	if ctx.IsSet("mnemonic") {
+		cfg.Accounts.Mnemonic = ctx.String("mnemonic")
+	}
+	if ctx.Bool("no-mining") {
+		cfg.Mining.Mode = "manual"
+	}
+	if ctx.IsSet("block-time") {
+		seconds, numberErr := strconv.ParseFloat(ctx.String("block-time"), 64)
+		interval, err := time.ParseDuration(ctx.String("block-time") + "s")
+		if numberErr != nil || seconds <= 0 || err != nil || interval <= 0 {
+			return ethertest.Config{}, errors.New("block-time must be positive seconds within duration range")
+		}
+		cfg.Mining.Mode = "interval"
+		cfg.Mining.Interval = interval
+		cfg.Mining.AutoMineEmpty = true
+	}
+	if ctx.IsSet("order") {
+		cfg.Mining.Order = ctx.String("order")
+	}
+	if ctx.IsSet("gas-limit") {
+		cfg.Chain.GasLimit = ctx.Uint64("gas-limit")
+	}
+	if ctx.IsSet("coinbase") {
+		cfg.Mining.FeeRecipient = ctx.String("coinbase")
+	}
+	if ctx.Bool("quiet") {
+		cfg.Log.Level = "off"
+	}
 	return ethertest.ResolveConfig(cfg)
 }
 
@@ -138,7 +212,9 @@ func runNode(ctx *cli.Context) error {
 	if err := node.Start(); err != nil {
 		return err
 	}
-	printDevelopmentAccounts(os.Stderr, cfg)
+	if !ctx.Bool("quiet") {
+		printDevelopmentAccounts(os.Stderr, cfg)
+	}
 	signalContext, stop := signal.NotifyContext(ctx.Context, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	waitErr := node.Wait(signalContext)

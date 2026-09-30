@@ -38,19 +38,7 @@ func (api *minerAPI) Stop(ctx context.Context) (bool, error) {
 }
 
 func (api *minerAPI) SetEtherbase(ctx context.Context, address common.Address) (bool, error) {
-	_, err := api.node.executeWrite(ctx, func(chain *executionChain) (any, error) {
-		previous := chain.feeRecipientAddress()
-		chain.setFeeRecipient(address)
-		if err := api.node.rebuildPendingView(ctx, chain); err != nil {
-			chain.setFeeRecipient(previous)
-			return nil, err
-		}
-		api.node.logger.Info("fee recipient changed",
-			"event", "fee_recipient_changed",
-			"address", address.Hex(),
-		)
-		return nil, nil
-	})
+	err := api.node.SetFeeRecipient(ctx, address)
 	return err == nil, err
 }
 

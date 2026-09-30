@@ -15,14 +15,22 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-func (api *ethAPI) Call(ctx context.Context, args callArgs, selector *rpc.BlockNumberOrHash, overrides *stateOverride) (hexutil.Bytes, error) {
+func (api *ethAPI) Call(ctx context.Context, args callArgs, selector *rpc.BlockNumberOrHash, overrides *stateOverride, blockOverrides *callBlockOverrides) (hexutil.Bytes, error) {
 	ctx, cancel := api.node.withRPCTimeout(ctx)
 	defer cancel()
 	blockSelector := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
 	if selector != nil {
 		blockSelector = *selector
 	}
-	result, err := api.executeCall(ctx, args, blockSelector, 0, overrides)
+	header, state, err := api.node.resolveState(blockSelector)
+	if err != nil {
+		return nil, err
+	}
+	header, err = blockOverrides.header(header)
+	if err != nil {
+		return nil, err
+	}
+	result, err := api.executeCallAtOverrides(ctx, args, header, state, 0, overrides, nil, blockOverrides)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +47,7 @@ func (api *ethAPI) Call(ctx context.Context, args callArgs, selector *rpc.BlockN
 	return output, nil
 }
 
-func (api *ethAPI) EstimateGas(ctx context.Context, args callArgs, selector *rpc.BlockNumberOrHash, overrides *stateOverride) (hexutil.Uint64, error) {
+func (api *ethAPI) EstimateGas(ctx context.Context, args callArgs, selector *rpc.BlockNumberOrHash, overrides *stateOverride, blockOverrides *callBlockOverrides) (hexutil.Uint64, error) {
 	ctx, cancel := api.node.withRPCTimeout(ctx)
 	defer cancel()
 	blockSelector := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
@@ -47,6 +55,10 @@ func (api *ethAPI) EstimateGas(ctx context.Context, args callArgs, selector *rpc
 		blockSelector = *selector
 	}
 	header, state, err := api.node.resolveState(blockSelector)
+	if err != nil {
+		return 0, err
+	}
+	header, err = blockOverrides.header(header)
 	if err != nil {
 		return 0, err
 	}
@@ -63,7 +75,7 @@ func (api *ethAPI) EstimateGas(ctx context.Context, args callArgs, selector *rpc
 	}
 	for low < high {
 		mid := low + (high-low)/2
-		result, callErr := api.executeCallAt(ctx, args, header, state, mid, overrides, nil)
+		result, callErr := api.executeCallAtOverrides(ctx, args, header, state, mid, overrides, nil, blockOverrides)
 		if callErr != nil {
 			if errors.Is(callErr, core.ErrIntrinsicGas) || errors.Is(callErr, core.ErrFloorDataGas) ||
 				errors.Is(callErr, core.ErrGasLimitReached) {
@@ -78,7 +90,7 @@ func (api *ethAPI) EstimateGas(ctx context.Context, args callArgs, selector *rpc
 			high = mid
 		}
 	}
-	result, err := api.executeCallAt(ctx, args, header, state, high, overrides, nil)
+	result, err := api.executeCallAtOverrides(ctx, args, header, state, high, overrides, nil, blockOverrides)
 	if err != nil || result.Failed() {
 		if err != nil {
 			return 0, err
@@ -86,10 +98,6 @@ func (api *ethAPI) EstimateGas(ctx context.Context, args callArgs, selector *rpc
 		return 0, result.Err
 	}
 	return hexutil.Uint64(high), nil
-}
-
-func (api *ethAPI) executeCall(ctx context.Context, args callArgs, selector rpc.BlockNumberOrHash, gasOverride uint64, overrides *stateOverride) (*core.ExecutionResult, error) {
-	return api.executeCallWithTracer(ctx, args, selector, gasOverride, overrides, nil)
 }
 
 func (api *ethAPI) executeCallWithTracer(ctx context.Context, args callArgs, selector rpc.BlockNumberOrHash, gasOverride uint64, overrides *stateOverride, hooks *tracing.Hooks) (*core.ExecutionResult, error) {
@@ -101,6 +109,10 @@ func (api *ethAPI) executeCallWithTracer(ctx context.Context, args callArgs, sel
 }
 
 func (api *ethAPI) executeCallAt(ctx context.Context, args callArgs, header *types.Header, state *statepkg.StateDB, gasOverride uint64, overrides *stateOverride, hooks *tracing.Hooks) (*core.ExecutionResult, error) {
+	return api.executeCallAtOverrides(ctx, args, header, state, gasOverride, overrides, hooks, nil)
+}
+
+func (api *ethAPI) executeCallAtOverrides(ctx context.Context, args callArgs, header *types.Header, state *statepkg.StateDB, gasOverride uint64, overrides *stateOverride, hooks *tracing.Hooks, blockOverrides *callBlockOverrides) (*core.ExecutionResult, error) {
 	if err := args.validateData(); err != nil {
 		return nil, &invalidParamsError{message: err.Error()}
 	}
@@ -222,6 +234,7 @@ func (api *ethAPI) executeCallAt(ctx context.Context, args callArgs, header *typ
 		SkipNonceChecks:       true, SkipTransactionChecks: true,
 	}
 	blockContext := core.NewEVMBlockContext(header, api.node.chain.blockchain, nil)
+	blockOverrides.apply(&blockContext)
 	var evmState vm.StateDB = state
 	if hooks != nil {
 		evmState = statepkg.NewHookedState(state, hooks)

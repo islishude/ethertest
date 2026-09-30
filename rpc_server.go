@@ -26,8 +26,8 @@ func (n *Node) startServers() error {
 		{Namespace: "ethertest", Service: &withdrawalAPI{n}},
 		{Namespace: "ethertest", Service: &executionRequestAPI{n}},
 		{Namespace: "ethertest", Service: &finalityAPI{n}},
-		{Namespace: "anvil", Service: &controlAPI{n}},
-		{Namespace: "evm", Service: &controlAPI{n}},
+		{Namespace: "anvil", Service: &anvilAPI{n}},
+		{Namespace: "evm", Service: &evmAPI{n}},
 	}
 	server, err := n.newRPCServer(apis)
 	if err != nil {

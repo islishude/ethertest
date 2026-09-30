@@ -83,3 +83,12 @@ subset = "testdata/vectors/gloas/generate.py"
 subset_sha256 = "7520e395162e77856a7a0dd43bcbebce6a1b9e046730909b2c3e83e8edf800d6"
 generated = "testdata/vectors/gloas/vectors.json"
 generated_sha256 = "279e193f4faa5d9a51b1f02f2381b0fb5c7a2c5234b4cdcc685df0db4a9dda73"
+
+[[source]]
+name = "anvil-compatibility"
+url = "https://github.com/foundry-rs/foundry"
+ref = "v1.7.1"
+commit = "4072e48705af9d93e3c0f6e29e93b5e9a40caed8"
+kind = "vendored-contract"
+subset = "specs/upstream/anvil-compatibility.json"
+subset_sha256 = "309cb7e763870545c94b5972f4a2ae74cedb313ee9e9d0641080aa7c502d8a32"

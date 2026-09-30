@@ -17,10 +17,19 @@ osaka_epoch = 0
 amsterdam_epoch = 0
 
 [mining]
+# CLI: --no-mining, --block-time <seconds>, --order, --coinbase.
+# Intervals control scheduling only; block timestamps remain slot-based.
 mode = "transaction"
 order = "fees"
+# interval = "1s"
+# auto_mine_empty = true
+# fee_recipient = "0x0000000000000000000000000000000000000000"
+
+# CLI --accounts, --balance (whole ETH), --mnemonic configure development accounts.
+# An imported genesis remains authoritative for its alloc.
 
 [http]
+# CLI --host/--port replace the corresponding address component; conflict with --http.
 enabled = true
 address = "127.0.0.1:8545"
 cors = ["*"]

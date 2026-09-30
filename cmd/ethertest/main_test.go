@@ -237,3 +237,34 @@ func TestAmsterdamConfigurationPrecedenceAndDescription(t *testing.T) {
 		t.Fatal("invalid Amsterdam epoch accepted")
 	}
 }
+
+func TestAnvilCLIConfiguration(t *testing.T) {
+	cfg, err := effectiveConfig(commandContext(t, "--host", "127.0.0.1", "--port", "9555", "--accounts", "2", "--balance", "42", "--no-mining", "--order", "fifo", "--gas-limit", "20000000", "--coinbase", "0x0000000000000000000000000000000000001234", "--quiet"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTP.Address != "127.0.0.1:9555" || cfg.Accounts.Count != 2 || cfg.Accounts.Balance != "42ether" || cfg.Mining.Mode != "manual" || cfg.Mining.Order != "fifo" || cfg.Chain.GasLimit != 20000000 || cfg.Log.Level != "off" {
+		t.Fatalf("flags not applied: %#v", cfg)
+	}
+	interval, err := effectiveConfig(commandContext(t, "--block-time", "0.5"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interval.Mining.Mode != "interval" || !interval.Mining.AutoMineEmpty || interval.Mining.Interval.String() != "500ms" || interval.Chain.SlotDuration.String() != "6s" {
+		t.Fatal("block-time changed slot semantics")
+	}
+	for _, args := range [][]string{
+		{"--http", "127.0.0.1:8545", "--port", "9555"}, {"--no-mining", "--block-time", "1"},
+		{"--port", "65536"}, {"--balance", "-1"}, {"--balance", "1ether"}, {"--block-time", "0"}, {"--block-time", "1h"}, {"--block-time", "1m2"},
+		{"--host", "0.0.0.0"}, {"--accounts", "0"}, {"--coinbase", "invalid"},
+	} {
+		if _, err := effectiveConfig(commandContext(t, args...)); err == nil {
+			t.Errorf("accepted %v", args)
+		}
+	}
+	t.Setenv("ETHERTEST_ACCOUNT_COUNT", "4")
+	cfg, err = effectiveConfig(commandContext(t, "--accounts", "3"))
+	if err != nil || cfg.Accounts.Count != 3 {
+		t.Fatal("CLI precedence", err)
+	}
+}

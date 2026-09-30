@@ -19,8 +19,9 @@ func (api *controlAPI) Capabilities() map[string]any {
 		"forkTransitions": []string{"deneb", "electra", "fulu", "gloas"},
 		"blobCodecs":      []string{"canonical-blob", "packed-bytes-v1"},
 		"p2p":             false, "engineAPI": false, "javascriptTracers": false,
-		"ipc":             api.node.ipcEndpoint != "",
-		"releaseComplete": false,
+		"ipc":                api.node.ipcEndpoint != "",
+		"releaseComplete":    false,
+		"anvilCompatibility": map[string]any{"version": "v1.7.1", "complete": false, "stateSetters": "control-block", "timestamps": "slot-based", "finality": "synthetic"},
 	}
 }
 

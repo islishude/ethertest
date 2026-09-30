@@ -1,7 +1,9 @@
 package ethertest
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -76,4 +78,30 @@ func (api *txpoolAPI) poolCounts() (pending, queued int) {
 	pending = len(api.node.chain.pendingView.executable)
 	queued = len(api.node.chain.pendingView.queued)
 	return pending, queued
+}
+
+// Inspect uses exactly the same executable/queued classification as Content.
+func (api *txpoolAPI) Inspect() map[string]map[string]map[string]string {
+	api.node.chain.mu.RLock()
+	defer api.node.chain.mu.RUnlock()
+	result := map[string]map[string]map[string]string{"pending": {}, "queued": {}}
+	for address, transactions := range api.node.chain.pending {
+		for nonce, tx := range transactions {
+			kind := "queued"
+			if api.node.chain.pendingView != nil {
+				if _, ok := api.node.chain.pendingView.executable[tx.Hash()]; ok {
+					kind = "pending"
+				}
+			}
+			if result[kind][strings.ToLower(address.Hex())] == nil {
+				result[kind][strings.ToLower(address.Hex())] = make(map[string]string)
+			}
+			to := "contract creation"
+			if tx.To() != nil {
+				to = strings.ToLower(tx.To().Hex())
+			}
+			result[kind][strings.ToLower(address.Hex())][strconv.FormatUint(nonce, 10)] = fmt.Sprintf("%s: %s wei + %d gas × %s wei", to, tx.Value(), tx.Gas(), tx.GasPrice())
+		}
+	}
+	return result
 }

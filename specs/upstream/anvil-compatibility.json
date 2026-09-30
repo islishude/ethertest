@@ -1,0 +1,2522 @@
+{
+  "ref": "v1.7.1",
+  "commit": "4072e48705af9d93e3c0f6e29e93b5e9a40caed8",
+  "source": "https://github.com/foundry-rs/foundry/blob/v1.7.1/crates/anvil/core/src/eth/mod.rs",
+  "methods": [
+    {
+      "method": "web3_clientVersion",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Reports ethertest identity, not Anvil",
+      "tests": [],
+      "registeredNames": [
+        "web3_clientVersion"
+      ],
+      "upstreamRequest": "Web3ClientVersion(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "web3_sha3",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "web3_sha3"
+      ],
+      "upstreamRequest": "Web3Sha3(Bytes),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_protocolVersion",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthProtocolVersion(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_chainId",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_chainId"
+      ],
+      "upstreamRequest": "EthChainId(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_networkId",
+      "aliases": [
+        "net_version"
+      ],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "net_version"
+      ],
+      "upstreamRequest": "EthNetworkId(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "net_listening",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Returns false because ethertest has no P2P networking; Anvil returns true",
+      "tests": [],
+      "registeredNames": [
+        "net_listening"
+      ],
+      "upstreamRequest": "NetListening(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_hashrate",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_hashrate"
+      ],
+      "upstreamRequest": "EthHashrate(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_gasPrice",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_gasPrice"
+      ],
+      "upstreamRequest": "EthGasPrice(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_maxPriorityFeePerGas",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_maxPriorityFeePerGas"
+      ],
+      "upstreamRequest": "EthMaxPriorityFeePerGas(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_blobBaseFee",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_blobBaseFee"
+      ],
+      "upstreamRequest": "EthBlobBaseFee(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_accounts",
+      "aliases": [
+        "eth_requestAccounts"
+      ],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_accounts"
+      ],
+      "upstreamRequest": "EthAccounts(()),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "eth_requestAccounts"
+      ]
+    },
+    {
+      "method": "eth_blockNumber",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_blockNumber"
+      ],
+      "upstreamRequest": "EthBlockNumber(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_coinbase",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_coinbase"
+      ],
+      "upstreamRequest": "EthCoinbase(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getBalance",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getBalance"
+      ],
+      "upstreamRequest": "EthGetBalance(Address, Option<BlockId>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getAccount",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetAccount(Address, Option<BlockId>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getAccountInfo",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetAccountInfo(Address, Option<BlockId>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getStorageAt",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getStorageAt"
+      ],
+      "upstreamRequest": "EthGetStorageAt(Address, U256, Option<BlockId>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getStorageValues",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getStorageValues"
+      ],
+      "upstreamRequest": "EthGetStorageValues(HashMap<Address, Vec<B256>>, Option<BlockId>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getBlockByHash",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getBlockByHash"
+      ],
+      "upstreamRequest": "EthGetBlockByHash(B256, bool),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getBlockByNumber",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getBlockByNumber"
+      ],
+      "upstreamRequest": "EthGetBlockByNumber(\n        #[serde(deserialize_with = \"lenient_block_number::lenient_block_number\")] BlockNumber,\n        bool,\n    ),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getTransactionCount",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getTransactionCount"
+      ],
+      "upstreamRequest": "EthGetTransactionCount(Address, Option<BlockId>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getBlockTransactionCountByHash",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getBlockTransactionCountByHash"
+      ],
+      "upstreamRequest": "EthGetTransactionCountByHash(B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getBlockTransactionCountByNumber",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getBlockTransactionCountByNumber"
+      ],
+      "upstreamRequest": "EthGetTransactionCountByNumber(BlockNumber),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getUncleCountByBlockHash",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetUnclesCountByHash(B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getUncleCountByBlockNumber",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetUnclesCountByNumber(BlockNumber),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getCode",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getCode"
+      ],
+      "upstreamRequest": "EthGetCodeAt(Address, Option<BlockId>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getProof",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getProof"
+      ],
+      "upstreamRequest": "EthGetProof(Address, Vec<B256>, Option<BlockId>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_sign",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_sign"
+      ],
+      "upstreamRequest": "EthSign(Address, Bytes),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "personal_sign",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "PersonalSign(Bytes, Address),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_signTransaction",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_signTransaction"
+      ],
+      "upstreamRequest": "EthSignTransaction(Box<WithOtherFields<TransactionRequest>>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_signTypedData",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthSignTypedData(Address, serde_json::Value),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_signTypedData_v3",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthSignTypedDataV3(Address, serde_json::Value),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_signTypedData_v4",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_signTypedData_v4"
+      ],
+      "upstreamRequest": "EthSignTypedDataV4(Address, alloy_dyn_abi::TypedData),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_sendTransaction",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_sendTransaction"
+      ],
+      "upstreamRequest": "EthSendTransaction(Box<WithOtherFields<TransactionRequest>>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_sendTransactionSync",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthSendTransactionSync(Box<WithOtherFields<TransactionRequest>>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_sendRawTransaction",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_sendRawTransaction"
+      ],
+      "upstreamRequest": "EthSendRawTransaction(Bytes),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_sendRawTransactionSync",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_sendRawTransactionSync"
+      ],
+      "upstreamRequest": "EthSendRawTransactionSync(Bytes),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_call",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "transaction, optional block selector, optional state overrides, optional block overrides",
+      "result": "hex bytes",
+      "effects": "Read-only copied state and block context",
+      "limitations": "Supports number,time,gasLimit,feeRecipient,prevRandao (32 bytes),baseFeePerGas,blobBaseFee. Unknown fields rejected. blobBaseFee is an extension: Anvil v1.7.1 ignores it. Existing gas/time/response caps remain.",
+      "tests": [
+        "TestCallBlockOverridesReadOnly",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "eth_call"
+      ],
+      "upstreamRequest": "EthCall(\n        WithOtherFields<TransactionRequest>,\n        #[serde(default)] Option<BlockId>,\n        #[serde(default)] Option<StateOverride>,\n        #[serde(default)] Option<Box<BlockOverrides>>,\n    ),",
+      "firstRound": true,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_simulateV1",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_simulateV1"
+      ],
+      "upstreamRequest": "EthSimulateV1(SimulatePayload, #[serde(default)] Option<BlockId>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_createAccessList",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_createAccessList"
+      ],
+      "upstreamRequest": "EthCreateAccessList(WithOtherFields<TransactionRequest>, #[serde(default)] Option<BlockId>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_estimateGas",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "transaction, optional block selector, optional state overrides, optional block overrides",
+      "result": "hex gas quantity",
+      "effects": "Read-only copied state and block context",
+      "limitations": "Supports number,time,gasLimit,feeRecipient,prevRandao (32 bytes),baseFeePerGas,blobBaseFee. Unknown fields rejected. blobBaseFee is an extension: Anvil v1.7.1 ignores it. Existing gas/time/response caps remain.",
+      "tests": [
+        "TestCallBlockOverridesReadOnly",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "eth_estimateGas"
+      ],
+      "upstreamRequest": "EthEstimateGas(\n        WithOtherFields<TransactionRequest>,\n        #[serde(default)] Option<BlockId>,\n        #[serde(default)] Option<StateOverride>,\n        #[serde(default)] Option<Box<BlockOverrides>>,\n    ),",
+      "firstRound": true,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_fillTransaction",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthFillTransaction(WithOtherFields<TransactionRequest>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getTransactionByHash",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getTransactionByHash"
+      ],
+      "upstreamRequest": "EthGetTransactionByHash(TxHash),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_getBlobByHash",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "GetBlobByHash(B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_getBlobsByTransactionHash",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "GetBlobByTransactionHash(TxHash),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_getGenesisTime",
+      "aliases": [],
+      "status": "compatible",
+      "parameters": "none",
+      "result": "integer Unix seconds",
+      "effects": "Read-only",
+      "limitations": "",
+      "tests": [
+        "TestAnvilRuntimeControls",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "anvil_getGenesisTime"
+      ],
+      "upstreamRequest": "GetGenesisTime(()),",
+      "firstRound": true,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getTransactionByBlockHashAndIndex",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getTransactionByBlockHashAndIndex"
+      ],
+      "upstreamRequest": "EthGetTransactionByBlockHashAndIndex(B256, Index),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getTransactionByBlockNumberAndIndex",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getTransactionByBlockNumberAndIndex"
+      ],
+      "upstreamRequest": "EthGetTransactionByBlockNumberAndIndex(BlockNumber, Index),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getRawTransactionByHash",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetRawTransactionByHash(TxHash),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getRawTransactionByBlockHashAndIndex",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetRawTransactionByBlockHashAndIndex(B256, Index),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getRawTransactionByBlockNumberAndIndex",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetRawTransactionByBlockNumberAndIndex(BlockNumber, Index),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getTransactionReceipt",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getTransactionReceipt"
+      ],
+      "upstreamRequest": "EthGetTransactionReceipt(B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getBlockReceipts",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getBlockReceipts"
+      ],
+      "upstreamRequest": "EthGetBlockReceipts(BlockId),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getUncleByBlockHashAndIndex",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetUncleByBlockHashAndIndex(B256, Index),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getUncleByBlockNumberAndIndex",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetUncleByBlockNumberAndIndex(\n        #[serde(deserialize_with = \"lenient_block_number::lenient_block_number\")] BlockNumber,\n        Index,\n    ),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getLogs",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getLogs"
+      ],
+      "upstreamRequest": "EthGetLogs(Filter),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_newFilter",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_newFilter"
+      ],
+      "upstreamRequest": "EthNewFilter(Filter),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getFilterChanges",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getFilterChanges"
+      ],
+      "upstreamRequest": "EthGetFilterChanges(String),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_newBlockFilter",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_newBlockFilter"
+      ],
+      "upstreamRequest": "EthNewBlockFilter(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_newPendingTransactionFilter",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_newPendingTransactionFilter"
+      ],
+      "upstreamRequest": "EthNewPendingTransactionFilter(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getFilterLogs",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getFilterLogs"
+      ],
+      "upstreamRequest": "EthGetFilterLogs(String),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_uninstallFilter",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_uninstallFilter"
+      ],
+      "upstreamRequest": "EthUninstallFilter(String),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getWork",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetWork(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_submitWork",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthSubmitWork(B64, B256, B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_submitHashrate",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthSubmitHashRate(U256, B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_feeHistory",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_feeHistory"
+      ],
+      "upstreamRequest": "EthFeeHistory(\n        #[serde(deserialize_with = \"deserialize_number\")] U256,\n        BlockNumber,\n        #[serde(default)] Vec<f64>,\n    ),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_syncing",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_syncing"
+      ],
+      "upstreamRequest": "EthSyncing(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_config",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_config"
+      ],
+      "upstreamRequest": "EthConfig(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_getRawTransaction",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "debug_getRawTransaction"
+      ],
+      "upstreamRequest": "DebugGetRawTransaction(TxHash),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_traceTransaction",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "debug_traceTransaction"
+      ],
+      "upstreamRequest": "DebugTraceTransaction(B256, #[serde(default)] GethDebugTracingOptions),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_traceCall",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "debug_traceCall"
+      ],
+      "upstreamRequest": "DebugTraceCall(\n        WithOtherFields<TransactionRequest>,\n        #[serde(default)] Option<BlockId>,\n        #[serde(default)] GethDebugTracingCallOptions,\n    ),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_codeByHash",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "DebugCodeByHash(B256, #[serde(default)] Option<BlockId>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_dbGet",
+      "aliases": [],
+      "status": "excluded",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside v0.1 or first-round scope",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "DebugDbGet(String),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_traceBlockByHash",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "debug_traceBlockByHash"
+      ],
+      "upstreamRequest": "DebugTraceBlockByHash(B256, #[serde(default)] GethDebugTracingOptions),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_traceBlockByNumber",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "debug_traceBlockByNumber"
+      ],
+      "upstreamRequest": "DebugTraceBlockByNumber(BlockNumber, #[serde(default)] GethDebugTracingOptions),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "trace_transaction",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "TraceTransaction(B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "trace_block",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "TraceBlock(BlockNumber),\n\n    // Return filtered traces over blocks",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "trace_filter",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "TraceFilter(TraceFilter),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "trace_replayBlockTransactions",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "TraceReplayBlockTransactions(\n        #[serde(deserialize_with = \"lenient_block_number::lenient_block_number\")] BlockNumber,\n        HashSet<TraceType>,\n    ),\n\n    // Custom endpoints, they're not extracted to a separate type out of serde convenience",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_impersonateAccount",
+      "aliases": [
+        "hardhat_impersonateAccount"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "ImpersonateAccount(Address),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "hardhat_impersonateAccount"
+      ]
+    },
+    {
+      "method": "anvil_stopImpersonatingAccount",
+      "aliases": [
+        "hardhat_stopImpersonatingAccount"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "StopImpersonatingAccount(Address),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "hardhat_stopImpersonatingAccount"
+      ]
+    },
+    {
+      "method": "anvil_autoImpersonateAccount",
+      "aliases": [
+        "hardhat_autoImpersonateAccount"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "AutoImpersonateAccount(bool),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "hardhat_autoImpersonateAccount"
+      ]
+    },
+    {
+      "method": "anvil_impersonateSignature",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "ImpersonateSignature(Bytes, Address),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_getAutomine",
+      "aliases": [
+        "hardhat_getAutomine"
+      ],
+      "status": "compatible",
+      "parameters": "none",
+      "result": "boolean",
+      "effects": "Read-only",
+      "limitations": "",
+      "tests": [
+        "TestAnvilRuntimeControls",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "anvil_getAutomine"
+      ],
+      "upstreamRequest": "GetAutoMine(()),",
+      "firstRound": true,
+      "unregisteredAliases": [
+        "hardhat_getAutomine"
+      ]
+    },
+    {
+      "method": "anvil_mine",
+      "aliases": [
+        "hardhat_mine"
+      ],
+      "status": "partial",
+      "parameters": "optional uint64 count (default 1), optional uint64 interval; JSON uint64 integer or uint256 numeric string",
+      "result": "null",
+      "effects": "Mines canonical blocks",
+      "limitations": "Omitted interval uses slot duration; explicit interval must equal slot duration; bounded by max_control_operations",
+      "tests": [
+        "TestAnvilAdapters",
+        "e2e/rpc/anvil.compat.test.mjs",
+        "TestAnvilMiningRangeOverflowIsAtomic"
+      ],
+      "registeredNames": [
+        "anvil_mine"
+      ],
+      "upstreamRequest": "Mine(\n        /// Number of blocks to mine, if not set `1` block is mined\n        #[serde(default, deserialize_with = \"deserialize_number_opt\")]\n        Option<U256>,\n        /// The time interval between each block in seconds, defaults to `1` seconds\n        /// The interval is applied only to blocks mined in the given method invocation, not to\n        /// blocks mined afterwards. Set this to `0` to instantly mine _all_ blocks\n        #[serde(default, deserialize_with = \"deserialize_number_opt\")]\n        Option<U256>,\n    ),",
+      "firstRound": true,
+      "unregisteredAliases": [
+        "hardhat_mine"
+      ],
+      "numberDecoding": "Strings use decimal by default, accept 0x/0X, 0o/0O, 0b/0B prefixes and underscores; empty digit sequence is zero. Counts/nonces/timestamps must fit uint64."
+    },
+    {
+      "method": "anvil_setAutomine",
+      "aliases": [
+        "evm_setAutomine"
+      ],
+      "status": "partial",
+      "parameters": "boolean",
+      "result": "null",
+      "effects": "true selects transaction mining and drains executable pool; false stops transaction mode only",
+      "limitations": "Draining is synchronous and uses normal bounded block execution; timestamps remain slot-based",
+      "tests": [
+        "TestAnvilRuntimeControls",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "anvil_setAutomine",
+        "evm_setAutomine"
+      ],
+      "upstreamRequest": "SetAutomine(bool),",
+      "firstRound": true,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_setIntervalMining",
+      "aliases": [
+        "evm_setIntervalMining"
+      ],
+      "status": "partial",
+      "parameters": "uint64 JSON seconds",
+      "result": "null",
+      "effects": "Positive interval selects periodic empty/nonempty mining; zero selects manual",
+      "limitations": "Wall-clock interval does not alter slot timestamps; duration must fit time.Duration",
+      "tests": [
+        "TestAnvilRuntimeControls",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "anvil_setIntervalMining",
+        "evm_setIntervalMining"
+      ],
+      "upstreamRequest": "SetIntervalMining(u64),",
+      "firstRound": true,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_getIntervalMining",
+      "aliases": [],
+      "status": "compatible",
+      "parameters": "none",
+      "result": "integer seconds or null",
+      "effects": "Read-only",
+      "limitations": "",
+      "tests": [
+        "TestAnvilRuntimeControls",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "anvil_getIntervalMining"
+      ],
+      "upstreamRequest": "GetIntervalMining(()),",
+      "firstRound": true,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_dropTransaction",
+      "aliases": [
+        "hardhat_dropTransaction"
+      ],
+      "status": "compatible",
+      "parameters": "32-byte transaction hash",
+      "result": "removed hash or null",
+      "effects": "Removes a pooled transaction, refreshes pending view, retains historical blobs",
+      "limitations": "",
+      "tests": [
+        "TestAnvilRuntimeControls",
+        "TestAnvilBlobPoolDeletionRetainsHistory",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "anvil_dropTransaction"
+      ],
+      "upstreamRequest": "DropTransaction(B256),",
+      "firstRound": true,
+      "unregisteredAliases": [
+        "hardhat_dropTransaction"
+      ]
+    },
+    {
+      "method": "anvil_dropAllTransactions",
+      "aliases": [
+        "hardhat_dropAllTransactions"
+      ],
+      "status": "compatible",
+      "parameters": "none",
+      "result": "null",
+      "effects": "Clears pending pool, refreshes pending view, retains historical blobs",
+      "limitations": "",
+      "tests": [
+        "TestAnvilRuntimeControls",
+        "TestAnvilBlobPoolDeletionRetainsHistory",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "anvil_dropAllTransactions"
+      ],
+      "upstreamRequest": "DropAllTransactions(),",
+      "firstRound": true,
+      "unregisteredAliases": [
+        "hardhat_dropAllTransactions"
+      ]
+    },
+    {
+      "method": "anvil_reset",
+      "aliases": [
+        "hardhat_reset"
+      ],
+      "status": "excluded",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside v0.1 or first-round scope",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "Reset(#[serde(default)] Option<Params<Option<Forking>>>),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "hardhat_reset"
+      ]
+    },
+    {
+      "method": "anvil_setRpcUrl",
+      "aliases": [],
+      "status": "excluded",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside v0.1 or first-round scope",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "SetRpcUrl(String),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_setBalance",
+      "aliases": [
+        "hardhat_setBalance",
+        "tenderly_setBalance"
+      ],
+      "status": "partial",
+      "parameters": "address, uint256 (JSON uint64 integer or uint256 numeric string)",
+      "result": "null",
+      "effects": "Creates one unsafe control block, refreshes pending state and canonical EL/Beacon projections",
+      "limitations": "Anvil edits state without mining; ethertest permanently taints the control block, descendants and session",
+      "tests": [
+        "TestAnvilAdapters",
+        "TestAnvilBlobPoolDeletionRetainsHistory",
+        "TestAnvilControlsAcrossAmsterdamBoundary",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "anvil_setBalance"
+      ],
+      "upstreamRequest": "SetBalance(Address, #[serde(deserialize_with = \"deserialize_number\")] U256),",
+      "firstRound": true,
+      "unregisteredAliases": [
+        "hardhat_setBalance",
+        "tenderly_setBalance"
+      ],
+      "numberDecoding": "Strings use decimal by default, accept 0x/0X, 0o/0O, 0b/0B prefixes and underscores; empty digit sequence is zero. Counts/nonces/timestamps must fit uint64."
+    },
+    {
+      "method": "anvil_addBalance",
+      "aliases": [
+        "hardhat_addBalance",
+        "tenderly_addBalance"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "AddBalance(Address, #[serde(deserialize_with = \"deserialize_number\")] U256),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "hardhat_addBalance",
+        "tenderly_addBalance"
+      ]
+    },
+    {
+      "method": "anvil_dealERC20",
+      "aliases": [
+        "hardhat_dealERC20",
+        "anvil_setERC20Balance"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "DealERC20(Address, Address, #[serde(deserialize_with = \"deserialize_number\")] U256),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "hardhat_dealERC20",
+        "anvil_setERC20Balance"
+      ]
+    },
+    {
+      "method": "anvil_setERC20Allowance",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "SetERC20Allowance(\n        Address,\n        Address,\n        Address,\n        #[serde(deserialize_with = \"deserialize_number\")] U256,\n    ),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_setCode",
+      "aliases": [
+        "hardhat_setCode"
+      ],
+      "status": "partial",
+      "parameters": "address, hex bytes",
+      "result": "null",
+      "effects": "Creates one unsafe control block, refreshes pending state and canonical EL/Beacon projections",
+      "limitations": "Anvil edits state without mining; ethertest permanently taints the control block, descendants and session",
+      "tests": [
+        "TestAnvilAdapters",
+        "TestAnvilBlobPoolDeletionRetainsHistory",
+        "TestAnvilControlsAcrossAmsterdamBoundary",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "anvil_setCode"
+      ],
+      "upstreamRequest": "SetCode(Address, Bytes),",
+      "firstRound": true,
+      "unregisteredAliases": [
+        "hardhat_setCode"
+      ]
+    },
+    {
+      "method": "anvil_setNonce",
+      "aliases": [
+        "hardhat_setNonce",
+        "evm_setAccountNonce"
+      ],
+      "status": "partial",
+      "parameters": "address, uint64 (JSON uint64 integer or uint256 numeric string)",
+      "result": "null",
+      "effects": "Creates one unsafe control block, refreshes pending state and canonical EL/Beacon projections",
+      "limitations": "Anvil edits state without mining; ethertest permanently taints the control block, descendants and session",
+      "tests": [
+        "TestAnvilAdapters",
+        "TestAnvilBlobPoolDeletionRetainsHistory",
+        "TestAnvilControlsAcrossAmsterdamBoundary",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "anvil_setNonce"
+      ],
+      "upstreamRequest": "SetNonce(Address, #[serde(deserialize_with = \"deserialize_number\")] U256),",
+      "firstRound": true,
+      "unregisteredAliases": [
+        "hardhat_setNonce",
+        "evm_setAccountNonce"
+      ],
+      "numberDecoding": "Strings use decimal by default, accept 0x/0X, 0o/0O, 0b/0B prefixes and underscores; empty digit sequence is zero. Counts/nonces/timestamps must fit uint64."
+    },
+    {
+      "method": "anvil_setStorageAt",
+      "aliases": [
+        "hardhat_setStorageAt"
+      ],
+      "status": "partial",
+      "parameters": "address, uint256 slot, 32-byte value",
+      "result": "true",
+      "effects": "Creates one unsafe control block, refreshes pending state and canonical EL/Beacon projections",
+      "limitations": "Anvil edits state without mining; ethertest permanently taints the control block, descendants and session",
+      "tests": [
+        "TestAnvilAdapters",
+        "TestAnvilBlobPoolDeletionRetainsHistory",
+        "TestAnvilControlsAcrossAmsterdamBoundary",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "anvil_setStorageAt"
+      ],
+      "upstreamRequest": "SetStorageAt(\n        Address,\n        /// slot\n        U256,\n        /// value\n        B256,\n    ),",
+      "firstRound": true,
+      "unregisteredAliases": [
+        "hardhat_setStorageAt"
+      ]
+    },
+    {
+      "method": "anvil_setCoinbase",
+      "aliases": [
+        "hardhat_setCoinbase"
+      ],
+      "status": "compatible",
+      "parameters": "address",
+      "result": "null",
+      "effects": "Changes runtime fee recipient and pending view; no block is mined",
+      "limitations": "",
+      "tests": [
+        "TestAnvilRuntimeControls",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "anvil_setCoinbase"
+      ],
+      "upstreamRequest": "SetCoinbase(Address),",
+      "firstRound": true,
+      "unregisteredAliases": [
+        "hardhat_setCoinbase"
+      ]
+    },
+    {
+      "method": "anvil_setChainId",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "SetChainId(u64),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_setLoggingEnabled",
+      "aliases": [
+        "hardhat_setLoggingEnabled"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "SetLogging(bool),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "hardhat_setLoggingEnabled"
+      ]
+    },
+    {
+      "method": "anvil_setMinGasPrice",
+      "aliases": [
+        "hardhat_setMinGasPrice"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "SetMinGasPrice(U256),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "hardhat_setMinGasPrice"
+      ]
+    },
+    {
+      "method": "anvil_setNextBlockBaseFeePerGas",
+      "aliases": [
+        "hardhat_setNextBlockBaseFeePerGas"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "SetNextBlockBaseFeePerGas(U256),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "hardhat_setNextBlockBaseFeePerGas"
+      ]
+    },
+    {
+      "method": "anvil_setTime",
+      "aliases": [
+        "evm_setTime"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EvmSetTime(U256),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "evm_setTime"
+      ]
+    },
+    {
+      "method": "anvil_dumpState",
+      "aliases": [
+        "hardhat_dumpState"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "DumpState(#[serde(default)] Option<Params<Option<bool>>>),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "hardhat_dumpState"
+      ]
+    },
+    {
+      "method": "anvil_loadState",
+      "aliases": [
+        "hardhat_loadState"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "LoadState(Bytes),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "hardhat_loadState"
+      ]
+    },
+    {
+      "method": "anvil_nodeInfo",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "NodeInfo(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_metadata",
+      "aliases": [
+        "hardhat_metadata"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "AnvilMetadata(()),\n\n    // Ganache compatible calls",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "hardhat_metadata"
+      ]
+    },
+    {
+      "method": "anvil_snapshot",
+      "aliases": [
+        "evm_snapshot"
+      ],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "anvil_snapshot",
+        "evm_snapshot"
+      ],
+      "upstreamRequest": "EvmSnapshot(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_revert",
+      "aliases": [
+        "evm_revert"
+      ],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "anvil_revert",
+        "evm_revert"
+      ],
+      "upstreamRequest": "EvmRevert(U256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_increaseTime",
+      "aliases": [
+        "evm_increaseTime"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EvmIncreaseTime(U256),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "evm_increaseTime"
+      ]
+    },
+    {
+      "method": "anvil_setNextBlockTimestamp",
+      "aliases": [
+        "evm_setNextBlockTimestamp"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EvmSetNextBlockTimeStamp(U256),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "evm_setNextBlockTimestamp"
+      ]
+    },
+    {
+      "method": "anvil_setBlockGasLimit",
+      "aliases": [
+        "evm_setBlockGasLimit"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EvmSetBlockGasLimit(U256),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "evm_setBlockGasLimit"
+      ]
+    },
+    {
+      "method": "anvil_setBlockTimestampInterval",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EvmSetBlockTimeStampInterval(u64),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_removeBlockTimestampInterval",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EvmRemoveBlockTimeStampInterval(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "evm_mine",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "optional timestamp or {timestamp,blocks} with required timestamp; JSON uint64 integers or numeric strings; default blocks=1",
+      "result": "0x0 string",
+      "effects": "Mines canonical blocks",
+      "limitations": "Explicit timestamp must equal next slot timestamp; zero/past/free timestamps rejected; bounded block count",
+      "tests": [
+        "TestAnvilAdapters",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "evm_mine"
+      ],
+      "upstreamRequest": "EvmMine(#[serde(default)] Option<Params<Option<MineOptions>>>),",
+      "firstRound": true,
+      "unregisteredAliases": [],
+      "numberDecoding": "Strings use decimal by default, accept 0x/0X, 0o/0O, 0b/0B prefixes and underscores; empty digit sequence is zero. Counts/nonces/timestamps must fit uint64."
+    },
+    {
+      "method": "anvil_mine_detailed",
+      "aliases": [
+        "evm_mine_detailed"
+      ],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EvmMineDetailed(#[serde(default)] Option<Params<Option<MineOptions>>>),",
+      "firstRound": false,
+      "unregisteredAliases": [
+        "evm_mine_detailed"
+      ]
+    },
+    {
+      "method": "eth_sendUnsignedTransaction",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthSendUnsignedTransaction(Box<WithOtherFields<TransactionRequest>>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "txpool_status",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "txpool_status"
+      ],
+      "upstreamRequest": "TxPoolStatus(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "txpool_inspect",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "none",
+      "result": "pending/queued address -> decimal nonce -> description",
+      "effects": "Read-only",
+      "limitations": "Classification follows ethertest pending candidate and resource limits",
+      "tests": [
+        "TestAnvilRuntimeControls",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "txpool_inspect"
+      ],
+      "upstreamRequest": "TxPoolInspect(()),",
+      "firstRound": true,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "txpool_content",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "txpool_content"
+      ],
+      "upstreamRequest": "TxPoolContent(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "erigon_getHeaderByNumber",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "ErigonGetHeaderByNumber(\n        #[serde(deserialize_with = \"lenient_block_number::lenient_block_number_seq\")] BlockNumber,\n    ),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "ots_getApiLevel",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "OtsGetApiLevel(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "ots_getInternalOperations",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "OtsGetInternalOperations(B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "ots_hasCode",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "OtsHasCode(\n        Address,\n        #[serde(deserialize_with = \"lenient_block_number::lenient_block_number\", default)]\n        BlockNumber,\n    ),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "ots_traceTransaction",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "OtsTraceTransaction(B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "ots_getTransactionError",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "OtsGetTransactionError(B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "ots_getBlockDetails",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "OtsGetBlockDetails(\n        #[serde(deserialize_with = \"lenient_block_number::lenient_block_number_seq\", default)]\n        BlockNumber,\n    ),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "ots_getBlockDetailsByHash",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "OtsGetBlockDetailsByHash(B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "ots_getBlockTransactions",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "OtsGetBlockTransactions(u64, usize, usize),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "ots_searchTransactionsBefore",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "OtsSearchTransactionsBefore(Address, u64, usize),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "ots_searchTransactionsAfter",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "OtsSearchTransactionsAfter(Address, u64, usize),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "ots_getTransactionBySenderAndNonce",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "OtsGetTransactionBySenderAndNonce(\n        Address,\n        #[serde(deserialize_with = \"deserialize_number\")] U256,\n    ),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getTransactionBySenderAndNonce",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetTransactionBySenderAndNonce(\n        Address,\n        #[serde(deserialize_with = \"deserialize_number\")] U256,\n    ),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "ots_getContractCreator",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "OtsGetContractCreator(Address),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_removePoolTransactions",
+      "aliases": [],
+      "status": "compatible",
+      "parameters": "address",
+      "result": "null",
+      "effects": "Removes pooled transactions from account, refreshes pending view",
+      "limitations": "",
+      "tests": [
+        "TestAnvilRuntimeControls",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ],
+      "registeredNames": [
+        "anvil_removePoolTransactions"
+      ],
+      "upstreamRequest": "RemovePoolTransactions(Address),",
+      "firstRound": true,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_reorg",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "Reorg(ReorgOptions),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_rollback",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Not yet differentially certified",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "Rollback(Option<u64>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_setFeeToken",
+      "aliases": [],
+      "status": "excluded",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside v0.1 or first-round scope",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "SetFeeToken(Address, Address),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_setValidatorFeeToken",
+      "aliases": [],
+      "status": "excluded",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside v0.1 or first-round scope",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "SetValidatorFeeToken(Address, Address),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_setFeeAmmLiquidity",
+      "aliases": [],
+      "status": "excluded",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside v0.1 or first-round scope",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "SetFeeAmmLiquidity(\n        /// user_token\n        Address,\n        /// validator_token\n        Address,\n        /// amount\n        #[serde(deserialize_with = \"deserialize_number\")]\n        U256,\n    ),\n}\n\n/// Represents ethereum JSON-RPC API\n#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]\n#[serde(tag = \"method\", content = \"params\")]",
+      "firstRound": false,
+      "unregisteredAliases": []
+    }
+  ],
+  "statuses": {
+    "compatible": "Selected contract with differential evidence; subject to documented global resource limits",
+    "partial": "Registered but behavior differs or full contract is not certified",
+    "unimplemented": "No registered entrypoint in this method family",
+    "excluded": "Outside v0.1 or selected first-round scope"
+  },
+  "subscriptions": [
+    {
+      "method": "eth_subscribe",
+      "kind": "newHeads",
+      "status": "partial",
+      "parameters": "none",
+      "result": "execution header",
+      "effects": "Read-only bounded live notifications",
+      "limitations": "Existing local header fields; gap/overflow disconnects connection",
+      "tests": [
+        "TestAnvilSubscriptions",
+        "TestSubscriptionOverflowClosesOnlyAffectedConnection",
+        "TestPendingEventGapAndImmutableTransaction",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ]
+    },
+    {
+      "method": "eth_subscribe",
+      "kind": "logs",
+      "status": "partial",
+      "parameters": "filter criteria",
+      "result": "log with removed flag",
+      "effects": "Read-only bounded live notifications",
+      "limitations": "All canonical rewinds emit removed logs first; Anvil v1.7.1 evm_revert does not emit them",
+      "tests": [
+        "TestAnvilSubscriptions",
+        "TestSubscriptionOverflowClosesOnlyAffectedConnection",
+        "TestPendingEventGapAndImmutableTransaction",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ]
+    },
+    {
+      "method": "eth_subscribe",
+      "kind": "newPendingTransactions",
+      "status": "partial",
+      "parameters": "optional full boolean (default false)",
+      "result": "hash or pending transaction with null inclusion fields",
+      "effects": "Read-only bounded live notifications",
+      "limitations": "Bounded acceptance history retained in memory even after mining/drop; gap/overflow disconnects connection",
+      "tests": [
+        "TestAnvilSubscriptions",
+        "TestSubscriptionOverflowClosesOnlyAffectedConnection",
+        "TestPendingEventGapAndImmutableTransaction",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ]
+    }
+  ],
+  "deprecatedAliases": [
+    "anvil_blockSafety",
+    "anvil_branchCreate",
+    "anvil_branchMine",
+    "anvil_branchSwitch",
+    "anvil_capabilities",
+    "anvil_checkpoint",
+    "anvil_mineEmpty",
+    "anvil_missSlots",
+    "anvil_networkConfig",
+    "anvil_restore",
+    "anvil_safetyStatus",
+    "anvil_setFeeRecipient",
+    "evm_blockSafety",
+    "evm_branchCreate",
+    "evm_branchMine",
+    "evm_branchSwitch",
+    "evm_capabilities",
+    "evm_checkpoint",
+    "evm_mineEmpty",
+    "evm_missSlots",
+    "evm_networkConfig",
+    "evm_restore",
+    "evm_safetyStatus",
+    "evm_setBalance",
+    "evm_setCode",
+    "evm_setFeeRecipient",
+    "evm_setNonce",
+    "evm_setStorageAt"
+  ],
+  "cli": [
+    {
+      "flag": "host",
+      "status": "partial",
+      "mapping": "http.address host; non-loopback requires unsafe opt-in; single shared listener",
+      "tests": [
+        "TestAnvilCLIConfiguration",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ]
+    },
+    {
+      "flag": "port",
+      "status": "compatible",
+      "mapping": "http.address port; conflicts with explicit --http",
+      "tests": [
+        "TestAnvilCLIConfiguration",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ]
+    },
+    {
+      "flag": "accounts",
+      "status": "partial",
+      "mapping": "accounts.count in 1..1024",
+      "tests": [
+        "TestAnvilCLIConfiguration",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ]
+    },
+    {
+      "flag": "balance",
+      "status": "partial",
+      "mapping": "whole non-negative ETH -> accounts.balance; generated genesis only",
+      "tests": [
+        "TestAnvilCLIConfiguration",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ]
+    },
+    {
+      "flag": "mnemonic",
+      "status": "partial",
+      "mapping": "accounts.mnemonic; no derivation-path options",
+      "tests": [
+        "TestAnvilCLIConfiguration",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ]
+    },
+    {
+      "flag": "no-mining",
+      "status": "compatible",
+      "mapping": "mining.mode=manual",
+      "tests": [
+        "TestAnvilCLIConfiguration",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ]
+    },
+    {
+      "flag": "block-time",
+      "status": "partial",
+      "mapping": "seconds -> interval mode with empty blocks; does not change slot duration",
+      "tests": [
+        "TestAnvilCLIConfiguration",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ]
+    },
+    {
+      "flag": "order",
+      "status": "compatible",
+      "mapping": "mining.order=fees|fifo",
+      "tests": [
+        "TestAnvilCLIConfiguration",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ]
+    },
+    {
+      "flag": "gas-limit",
+      "status": "partial",
+      "mapping": "chain.gas_limit; imported genesis remains authoritative",
+      "tests": [
+        "TestAnvilCLIConfiguration",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ]
+    },
+    {
+      "flag": "coinbase",
+      "status": "compatible",
+      "mapping": "mining.fee_recipient",
+      "tests": [
+        "TestAnvilCLIConfiguration",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ]
+    },
+    {
+      "flag": "quiet",
+      "status": "compatible",
+      "mapping": "log.level=off and no development-account banner",
+      "tests": [
+        "TestAnvilCLIConfiguration",
+        "e2e/rpc/anvil.compat.test.mjs"
+      ]
+    }
+  ]
+}

@@ -134,7 +134,7 @@ func (api *ethAPI) buildAndSignTransaction(ctx context.Context, args callArgs, r
 			return nil, errors.New("gas not specified")
 		}
 		pending := rpc.BlockNumberOrHashWithNumber(rpc.PendingBlockNumber)
-		gas, err := api.EstimateGas(ctx, args, &pending, nil)
+		gas, err := api.EstimateGas(ctx, args, &pending, nil, nil)
 		if err != nil {
 			return nil, err
 		}

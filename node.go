@@ -2,6 +2,7 @@ package ethertest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -94,6 +95,8 @@ type Node struct {
 	miningMu                 sync.RWMutex
 	miningMode               string
 	resumeMiningMode         string
+	miningInterval           time.Duration
+	miningEmpty              bool
 	miningChanged            chan struct{}
 	pendingWithdrawals       []WithdrawalRequest
 	pendingExecutionRequests executionRequestQueue
@@ -183,7 +186,7 @@ func newNode(cfg Config, genesis *core.Genesis, suppliedOptions ...Option) (*Nod
 		closeDone: make(chan struct{}), rootCtx: rootCtx, rootCancel: rootCancel,
 		snapshots: make(map[uint64]*chainPoint), checkpoints: checkpoints,
 		branches: branches, logger: options.logger,
-		miningMode: cfg.Mining.Mode, miningChanged: make(chan struct{}, 1),
+		miningMode: cfg.Mining.Mode, miningInterval: cfg.Mining.Interval, miningEmpty: cfg.Mining.AutoMineEmpty, miningChanged: make(chan struct{}, 1),
 		pendingExecutionRequests: executionRequests,
 	}
 	if cfg.Mining.Mode == miningModeManual {
@@ -493,7 +496,7 @@ func (n *Node) run() {
 			ticker, ticks = nil, nil
 		}
 		if n.currentMiningMode() == "interval" {
-			ticker = time.NewTicker(n.cfg.Mining.Interval)
+			ticker = time.NewTicker(n.IntervalMining())
 			ticks = ticker.C
 		}
 	}
@@ -537,7 +540,7 @@ func (n *Node) run() {
 				continue
 			}
 			if n.chain.pendingCount() == 0 && len(n.pendingWithdrawals) == 0 &&
-				n.pendingExecutionRequests.empty() && !n.cfg.Mining.AutoMineEmpty {
+				n.pendingExecutionRequests.empty() && !n.miningEmpty {
 				continue
 			}
 			block, _, err := n.mineExecutionBlock(background, n.chain, false)
@@ -631,6 +634,14 @@ func (n *Node) SendTransaction(ctx context.Context, tx *types.Transaction) (comm
 		tx = tx.WithBlobTxSidecar(sidecar.Copy())
 	}
 	value, err := n.executeWrite(ctx, func(chain *executionChain) (any, error) {
+		header := chain.blockchain.CurrentBlock()
+		if pending := chain.pendingBlock(); pending != nil {
+			header = pending.Header()
+		}
+		notification, err := json.Marshal(newRPCTransaction(tx, common.Hash{}, header.Number.Uint64(), header.Time, 0, nil, chain.config))
+		if err != nil {
+			return common.Hash{}, err
+		}
 		snapshot := chain.snapshotTransactionPool()
 		oldHead := chain.blockchain.CurrentBlock().Hash()
 		if err := chain.addTransaction(tx); err != nil {
@@ -653,7 +664,7 @@ func (n *Node) SendTransaction(ctx context.Context, tx *types.Transaction) (comm
 			}
 			chain.setPendingView(candidate)
 		}
-		n.pendingEvents.record(tx.Hash())
+		n.pendingEvents.record(tx.Hash(), notification)
 		n.logger.Debug("transaction accepted",
 			"event", "transaction_accepted",
 			"transaction_hash", tx.Hash().Hex(),
@@ -701,44 +712,48 @@ func (n *Node) Mine(ctx context.Context, count uint64, empty bool) ([]common.Has
 		return nil, err
 	}
 	value, err := n.executeWrite(ctx, func(chain *executionChain) (any, error) {
-		hashes := make([]common.Hash, 0, count)
-		var firstNumber uint64
-		var lastNumber uint64
-		var transactions uint64
-		for range count {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			block, _, err := n.mineExecutionBlock(ctx, chain, empty)
-			if err != nil {
-				return nil, err
-			}
-			hashes = append(hashes, block.Hash())
-			if len(hashes) == 1 {
-				firstNumber = block.NumberU64()
-			}
-			lastNumber = block.NumberU64()
-			transactions += uint64(len(block.Transactions()))
-		}
-		if len(hashes) != 0 {
-			n.logger.Info("blocks mined",
-				"event", "blocks_mined",
-				"source", miningModeManual,
-				"blocks", len(hashes),
-				"transactions", transactions,
-				"first_block", firstNumber,
-				"last_block", lastNumber,
-				"head_hash", hashes[len(hashes)-1].Hex(),
-				"slot", chain.currentSlot(),
-				"empty", empty,
-			)
-		}
-		return hashes, nil
+		return n.mineBlocks(ctx, chain, count, empty)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return value.([]common.Hash), nil
+}
+
+func (n *Node) mineBlocks(ctx context.Context, chain *executionChain, count uint64, empty bool) ([]common.Hash, error) {
+	hashes := make([]common.Hash, 0, count)
+	var firstNumber uint64
+	var lastNumber uint64
+	var transactions uint64
+	for range count {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		block, _, err := n.mineExecutionBlock(ctx, chain, empty)
+		if err != nil {
+			return nil, err
+		}
+		hashes = append(hashes, block.Hash())
+		if len(hashes) == 1 {
+			firstNumber = block.NumberU64()
+		}
+		lastNumber = block.NumberU64()
+		transactions += uint64(len(block.Transactions()))
+	}
+	if len(hashes) != 0 {
+		n.logger.Info("blocks mined",
+			"event", "blocks_mined",
+			"source", miningModeManual,
+			"blocks", len(hashes),
+			"transactions", transactions,
+			"first_block", firstNumber,
+			"last_block", lastNumber,
+			"head_hash", hashes[len(hashes)-1].Hex(),
+			"slot", chain.currentSlot(),
+			"empty", empty,
+		)
+	}
+	return hashes, nil
 }
 
 func (n *Node) mineExecutionBlock(ctx context.Context, chain *executionChain, empty bool) (*types.Block, types.Receipts, error) {

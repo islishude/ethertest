@@ -76,7 +76,7 @@ The network surface currently includes:
 - An in-memory wallet for configured and runtime-imported signers, including
   `eth_signTypedData_v4`, standalone EIP-7702 authorization signing, and
   `ethertest_importAccount`/`ethertest_removeAccount`.
-- EIP-1186 proofs, state overrides, polling filters, `newHeads`, HTTP/WS/IPC batch,
+- EIP-1186 proofs, state overrides, polling filters, `newHeads`/`logs`/`newPendingTransactions` subscriptions, HTTP/WS/IPC batch,
   struct logging, `debug_traceBlockByHash`, `debug_traceBlockByNumber`, and
   native Go tracers. JavaScript tracers are rejected.
 - One immutable pending candidate view shared by pending block/state/call/proof
@@ -103,6 +103,22 @@ The network surface currently includes:
   `ethertest_blockSafety` for permanent fixture taint discovery.
 - Offline locked EIP-4788 wraparound, KZG proof, and SSZ container regression
   vectors; their source revisions and digests are recorded in `spec.lock`.
+
+### Anvil development workflows
+
+The selected Anvil v1.7.1 subset includes dedicated `anvil_*` / `evm_*`
+adapters, runtime mining and pool controls, read-only block overrides, and
+common CLI flags. This is **partial compatibility**: state setters still mine
+permanently tainted control blocks, timestamps remain slot-based, and finality
+is synthetic. The default chain ID remains `1337`.
+
+`anvil_setBalance/setCode/setNonce` now return `null`, `anvil_setStorageAt`
+returns `true`, `anvil_mine` returns `null`, and `evm_mine` returns `"0x0"`.
+Use the corresponding `ethertest_*` methods to retain block-hash results;
+quantity-style `evm_mine(count)` callers must migrate to `ethertest_mine(count)`.
+See [the compatibility contracts, migration table, CLI flags, and differential
+checks](docs/anvil-compatibility.md). `make test-anvil-compat` uses the pinned
+reference and fails if it is missing; ordinary Go tests remain offline.
 
 ### Execution APIs v1.0.0-beta.7
 

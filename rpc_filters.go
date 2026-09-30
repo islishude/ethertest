@@ -291,54 +291,6 @@ func (api *ethAPI) filterIncludesBlock(query ethereum.FilterQuery, event Event, 
 	return true, nil
 }
 
-func (api *ethAPI) NewHeads(ctx context.Context) (*rpc.Subscription, error) {
-	notifier, ok := rpc.NotifierFromContext(ctx)
-	if !ok {
-		return nil, errors.New("notifications unsupported")
-	}
-	if err := api.node.reserveSubscription(); err != nil {
-		return nil, err
-	}
-	subscription := notifier.CreateSubscription()
-	go func() {
-		defer api.node.releaseSubscription()
-		revision := api.node.Revision()
-		for {
-			events, changed, err := api.node.events.sinceAndWait(revision)
-			if errors.Is(err, ErrEventGap) {
-				revision = api.node.Revision()
-				continue
-			}
-			if err != nil {
-				return
-			}
-			for _, event := range events {
-				revision = event.Revision
-				if !isBlockRevisionEvent(event) || event.Removed {
-					continue
-				}
-				block := api.node.chain.blockchain.GetBlockByHash(event.BlockHash)
-				if block != nil {
-					if err := notifier.Notify(subscription.ID, block.Header()); err != nil {
-						return
-					}
-				}
-			}
-			if len(events) != 0 {
-				continue
-			}
-			select {
-			case <-subscription.Err():
-				return
-			case <-api.node.stopping:
-				return
-			case <-changed:
-			}
-		}
-	}()
-	return subscription, nil
-}
-
 func (api *ethAPI) logs(ctx context.Context, criteria filters.FilterCriteria, fromOverride *uint64) ([]*types.Log, error) {
 	if api.node.cfg.Limits.MaxResponseBytes < 2 {
 		return nil, newResourceLimitError("log response bytes", 2, uint64(api.node.cfg.Limits.MaxResponseBytes))

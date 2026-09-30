@@ -1,4 +1,4 @@
-.PHONY: all build test test-race test-rpc-e2e lint generate-check clean
+.PHONY: all build test test-race test-rpc-e2e test-anvil-compat lint generate-check clean
 
 GO ?= go
 GOLANGCI_LINT ?= golangci-lint
@@ -19,6 +19,10 @@ test-race:
 test-rpc-e2e: build
 	$(NPM) --prefix $(RPC_E2E_DIR) ci --ignore-scripts
 	RPC_E2E_BINARY=$(CURDIR)/bin/ethertest $(NPM) --prefix $(RPC_E2E_DIR) test
+
+test-anvil-compat: build
+	$(NPM) --prefix $(RPC_E2E_DIR) ci --ignore-scripts
+	RPC_E2E_BINARY=$(CURDIR)/bin/ethertest node --test --test-concurrency=1 $(RPC_E2E_DIR)/anvil.compat.test.mjs
 
 lint:
 	$(GOLANGCI_LINT) run

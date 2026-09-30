@@ -66,6 +66,7 @@ jobs:
         with:
           version: v1.7.1
       - run: make test-rpc-e2e
+      - run: make test-anvil-compat
 
   container:
     runs-on: ubuntu-latest
