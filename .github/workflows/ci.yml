@@ -64,7 +64,7 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: v1.7.1
+          version: v1.8.3
       - run: make test-rpc-e2e
       - run: make test-anvil-compat
 

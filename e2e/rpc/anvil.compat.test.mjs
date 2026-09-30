@@ -90,11 +90,11 @@ async function stream(node) {
   }
 }
 
-test('Anvil v1.7.1 common workflow contract and explicit differences', { timeout: 120000 }, async t => {
+test('Anvil v1.8.3 common workflow contract and explicit differences', { timeout: 120000 }, async t => {
   const version = spawnSync(ANVIL, ['--version'], { encoding: 'utf8' })
   assert.equal(version.status, 0, 'Anvil is required; this suite must not skip')
-  assert.match(version.stdout, /anvil Version: 1\.7\.1\b/)
-  assert.match(version.stdout, /4072e48705af9d93e3c0f6e29e93b5e9a40caed8/)
+  assert.match(version.stdout, /anvil Version: 1\.8\.3\b/)
+  assert.match(version.stdout, /cae51ad458f6abb64852b7709eb784352429825d/)
   const nodes = [await start('anvil', t), await start('ethertest', t)]
   async function equal(method, params = [], expected) {
     const results = await Promise.all(nodes.map(node => node.rpc(method, params)))
@@ -168,20 +168,21 @@ test('Anvil v1.7.1 common workflow contract and explicit differences', { timeout
   for (const [field, opcode, value] of [['number', '43', '0x123'], ['time', '42', '0x70000000'], ['gasLimit', '45', '0x100000'], ['feeRecipient', '41', address], ['prevRandao', '44', `0x${'0'.repeat(61)}123`], ['baseFeePerGas', '48', '0x123'], ['blobBaseFee', '4a', '0x123']]) {
     const args = [{ to: address }, 'latest', { [address]: { code: `0x${opcode}60005260206000f3` } }, { [field]: value }]
     const expected = `0x${BigInt(value).toString(16).padStart(64, '0')}`
-    if (field === 'blobBaseFee') {
-      // v1.7.1 ignores this field; ethertest deliberately implements it.
-      const oracle = await nodes[0].rpc('eth_call', args)
-      assert.equal(oracle, await nodes[0].rpc('eth_call', args.slice(0, 3)))
-      assert.notEqual(oracle, expected)
-      assert.equal(await nodes[1].rpc('eth_call', args), expected)
-    } else await equal('eth_call', args, expected)
+    await equal('eth_call', args, expected)
     await equal('eth_estimateGas', args)
   }
 
   const raw = await account.signTransaction({ chainId: 1337, type: 'eip1559', nonce: 0, to: address, value: 1n, gas: 21000n, maxFeePerGas: 3000000000n, maxPriorityFeePerGas: 1000000000n })
   const hash = await equal('eth_sendRawTransaction', [raw])
   await equal('txpool_status')
-  await equal('txpool_inspect')
+  // v1.8.3 uses checksummed sender keys; ethertest preserves lowercase keys.
+  for (const node of nodes) {
+    const sender = node.name === 'anvil' ? account.address : account.address.toLowerCase()
+    assert.deepEqual(await node.rpc('txpool_inspect'), {
+      pending: { [sender]: { '0': `${address}: 1 wei + 21000 gas × 3000000000 wei` } },
+      queued: {},
+    })
+  }
   await equal('anvil_dropTransaction', [hash], hash)
   await equal('anvil_dropTransaction', [hash], null)
   await equal('eth_sendRawTransaction', [raw], hash)
@@ -214,7 +215,7 @@ test('Anvil v1.7.1 common workflow contract and explicit differences', { timeout
     const canonical = await events.take(logs)
     assert.equal(canonical.removed, false)
     assert.equal(await node.rpc('evm_revert', [snapshot]), true)
-    // Anvil v1.7.1 evm_revert does not emit removed logs. ethertest must
+    // Anvil v1.8.3 evm_revert does not emit removed logs. ethertest must
     // preserve its stronger canonical revision contract for all rewinds.
     if (node.name === 'ethertest') {
       const removed = await events.take(logs)

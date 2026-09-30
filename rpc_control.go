@@ -21,7 +21,7 @@ func (api *controlAPI) Capabilities() map[string]any {
 		"p2p":             false, "engineAPI": false, "javascriptTracers": false,
 		"ipc":                api.node.ipcEndpoint != "",
 		"releaseComplete":    false,
-		"anvilCompatibility": map[string]any{"version": "v1.7.1", "complete": false, "stateSetters": "control-block", "timestamps": "slot-based", "finality": "synthetic"},
+		"anvilCompatibility": map[string]any{"version": "v1.8.3", "complete": false, "stateSetters": "control-block", "timestamps": "slot-based", "finality": "synthetic"},
 	}
 }
 

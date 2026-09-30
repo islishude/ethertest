@@ -106,7 +106,7 @@ The network surface currently includes:
 
 ### Anvil development workflows
 
-The selected Anvil v1.7.1 subset includes dedicated `anvil_*` / `evm_*`
+The selected Anvil v1.8.3 subset includes dedicated `anvil_*` / `evm_*`
 adapters, runtime mining and pool controls, read-only block overrides, and
 common CLI flags. This is **partial compatibility**: state setters still mine
 permanently tainted control blocks, timestamps remain slot-based, and finality
@@ -490,7 +490,7 @@ configuration in a dedicated job.
 
 `make test-rpc-e2e` builds and starts the real CLI on random loopback ports,
 then runs the representative-client JSON-RPC suite against it. The suite
-requires Node.js 24 or newer and Foundry/cast v1.7.1; it installs the lockfile's
+requires Node.js 24 or newer and Foundry/cast v1.8.3; it installs the lockfile's
 exact viem v2.55.13 dependency with lifecycle scripts disabled. viem typed
 actions and cast typed/raw calls collectively exercise every method marked
 implemented in the locked execution API subset, plus HTTP batching, WebSocket

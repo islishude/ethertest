@@ -1,7 +1,7 @@
 {
-  "ref": "v1.7.1",
-  "commit": "4072e48705af9d93e3c0f6e29e93b5e9a40caed8",
-  "source": "https://github.com/foundry-rs/foundry/blob/v1.7.1/crates/anvil/core/src/eth/mod.rs",
+  "ref": "v1.8.3",
+  "commit": "cae51ad458f6abb64852b7709eb784352429825d",
+  "source": "https://github.com/foundry-rs/foundry/blob/v1.8.3/crates/anvil/core/src/eth/mod.rs",
   "methods": [
     {
       "method": "web3_clientVersion",
@@ -132,6 +132,20 @@
       "unregisteredAliases": []
     },
     {
+      "method": "eth_baseFee",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthBaseFee(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
       "method": "eth_maxPriorityFeePerGas",
       "aliases": [],
       "status": "partial",
@@ -227,7 +241,7 @@
       "registeredNames": [
         "eth_getBalance"
       ],
-      "upstreamRequest": "EthGetBalance(Address, Option<BlockId>),",
+      "upstreamRequest": "EthGetBalance(Address, #[serde(default)] Option<BlockId>),",
       "firstRound": false,
       "unregisteredAliases": []
     },
@@ -271,7 +285,7 @@
       "registeredNames": [
         "eth_getStorageAt"
       ],
-      "upstreamRequest": "EthGetStorageAt(Address, U256, Option<BlockId>),",
+      "upstreamRequest": "EthGetStorageAt(Address, U256, #[serde(default)] Option<BlockId>),",
       "firstRound": false,
       "unregisteredAliases": []
     },
@@ -287,7 +301,7 @@
       "registeredNames": [
         "eth_getStorageValues"
       ],
-      "upstreamRequest": "EthGetStorageValues(HashMap<Address, Vec<B256>>, Option<BlockId>),",
+      "upstreamRequest": "EthGetStorageValues(HashMap<Address, Vec<B256>>, #[serde(default)] Option<BlockId>),",
       "firstRound": false,
       "unregisteredAliases": []
     },
@@ -308,6 +322,20 @@
       "unregisteredAliases": []
     },
     {
+      "method": "eth_getHeaderByHash",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetHeaderByHash(B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
       "method": "eth_getBlockByNumber",
       "aliases": [],
       "status": "partial",
@@ -324,6 +352,78 @@
       "unregisteredAliases": []
     },
     {
+      "method": "eth_getHeaderByNumber",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetHeaderByNumber(BlockNumber),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getBlockAccessList",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "eth_getBlockAccessList"
+      ],
+      "upstreamRequest": "EthGetBlockAccessList(BlockId),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getBlockAccessListByBlockHash",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetBlockAccessListByBlockHash(B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getBlockAccessListByBlockNumber",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetBlockAccessListByBlockNumber(BlockNumber),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_getBlockAccessListRaw",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthGetBlockAccessListRaw(BlockId),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
       "method": "eth_getTransactionCount",
       "aliases": [],
       "status": "partial",
@@ -335,7 +435,7 @@
       "registeredNames": [
         "eth_getTransactionCount"
       ],
-      "upstreamRequest": "EthGetTransactionCount(Address, Option<BlockId>),",
+      "upstreamRequest": "EthGetTransactionCount(Address, #[serde(default)] Option<BlockId>),",
       "firstRound": false,
       "unregisteredAliases": []
     },
@@ -411,7 +511,7 @@
       "registeredNames": [
         "eth_getCode"
       ],
-      "upstreamRequest": "EthGetCodeAt(Address, Option<BlockId>),",
+      "upstreamRequest": "EthGetCodeAt(Address, #[serde(default)] Option<BlockId>),",
       "firstRound": false,
       "unregisteredAliases": []
     },
@@ -427,7 +527,7 @@
       "registeredNames": [
         "eth_getProof"
       ],
-      "upstreamRequest": "EthGetProof(Address, Vec<B256>, Option<BlockId>),",
+      "upstreamRequest": "EthGetProof(Address, Vec<B256>, #[serde(default)] Option<BlockId>),",
       "firstRound": false,
       "unregisteredAliases": []
     },
@@ -538,6 +638,20 @@
       "unregisteredAliases": []
     },
     {
+      "method": "eth_resend",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthResend(Box<WithOtherFields<TransactionRequest>>, Option<U256>, Option<U64>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
       "method": "eth_sendTransactionSync",
       "aliases": [],
       "status": "unimplemented",
@@ -579,7 +693,49 @@
       "registeredNames": [
         "eth_sendRawTransactionSync"
       ],
-      "upstreamRequest": "EthSendRawTransactionSync(Bytes),",
+      "upstreamRequest": "EthSendRawTransactionSync(Bytes, #[serde(default)] Option<u64>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_sendRawTransactionConditional",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthSendRawTransactionConditional(Bytes, TransactionConditional),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_signRawTransaction",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthSignRawTransaction(Bytes),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_classifyTransaction",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "AnvilClassifyTransaction(Bytes),",
       "firstRound": false,
       "unregisteredAliases": []
     },
@@ -590,7 +746,7 @@
       "parameters": "transaction, optional block selector, optional state overrides, optional block overrides",
       "result": "hex bytes",
       "effects": "Read-only copied state and block context",
-      "limitations": "Supports number,time,gasLimit,feeRecipient,prevRandao (32 bytes),baseFeePerGas,blobBaseFee. Unknown fields rejected. blobBaseFee is an extension: Anvil v1.7.1 ignores it. Existing gas/time/response caps remain.",
+      "limitations": "Supports number,time,gasLimit,feeRecipient,prevRandao (32 bytes),baseFeePerGas,blobBaseFee. Unknown fields rejected. Like Anvil v1.8.3, blobBaseFee overrides BLOBBASEFEE. Existing gas/time/response caps remain.",
       "tests": [
         "TestCallBlockOverridesReadOnly",
         "e2e/rpc/anvil.compat.test.mjs"
@@ -600,6 +756,34 @@
       ],
       "upstreamRequest": "EthCall(\n        WithOtherFields<TransactionRequest>,\n        #[serde(default)] Option<BlockId>,\n        #[serde(default)] Option<StateOverride>,\n        #[serde(default)] Option<Box<BlockOverrides>>,\n    ),",
       "firstRound": true,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_callMany",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthCallMany(\n        Vec<Bundle<WithOtherFields<TransactionRequest>>>,\n        #[serde(default)] Option<StateContext>,\n        #[serde(default)] Option<StateOverride>,\n    ),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_callBundle",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthCallBundle(EthCallBundle),",
+      "firstRound": false,
       "unregisteredAliases": []
     },
     {
@@ -614,7 +798,7 @@
       "registeredNames": [
         "eth_simulateV1"
       ],
-      "upstreamRequest": "EthSimulateV1(SimulatePayload, #[serde(default)] Option<BlockId>),",
+      "upstreamRequest": "EthSimulateV1(\n        SimulatePayload<WithOtherFields<TransactionRequest>>,\n        #[serde(default)] Option<BlockId>,\n    ),",
       "firstRound": false,
       "unregisteredAliases": []
     },
@@ -630,7 +814,7 @@
       "registeredNames": [
         "eth_createAccessList"
       ],
-      "upstreamRequest": "EthCreateAccessList(WithOtherFields<TransactionRequest>, #[serde(default)] Option<BlockId>),",
+      "upstreamRequest": "EthCreateAccessList(\n        WithOtherFields<TransactionRequest>,\n        #[serde(default)] Option<BlockId>,\n        #[serde(default)] Option<StateOverride>,\n    ),",
       "firstRound": false,
       "unregisteredAliases": []
     },
@@ -641,7 +825,7 @@
       "parameters": "transaction, optional block selector, optional state overrides, optional block overrides",
       "result": "hex gas quantity",
       "effects": "Read-only copied state and block context",
-      "limitations": "Supports number,time,gasLimit,feeRecipient,prevRandao (32 bytes),baseFeePerGas,blobBaseFee. Unknown fields rejected. blobBaseFee is an extension: Anvil v1.7.1 ignores it. Existing gas/time/response caps remain.",
+      "limitations": "Supports number,time,gasLimit,feeRecipient,prevRandao (32 bytes),baseFeePerGas,blobBaseFee. Unknown fields rejected. Like Anvil v1.8.3, blobBaseFee overrides BLOBBASEFEE. Existing gas/time/response caps remain.",
       "tests": [
         "TestCallBlockOverridesReadOnly",
         "e2e/rpc/anvil.compat.test.mjs"
@@ -680,6 +864,20 @@
         "eth_getTransactionByHash"
       ],
       "upstreamRequest": "EthGetTransactionByHash(TxHash),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "eth_pendingTransactions",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "EthPendingTransactions(()),",
       "firstRound": false,
       "unregisteredAliases": []
     },
@@ -728,6 +926,20 @@
       ],
       "upstreamRequest": "GetGenesisTime(()),",
       "firstRound": true,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "anvil_getLastBlockWallTime",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "GetLastBlockWallTime(()),",
+      "firstRound": false,
       "unregisteredAliases": []
     },
     {
@@ -940,7 +1152,7 @@
       "registeredNames": [
         "eth_newPendingTransactionFilter"
       ],
-      "upstreamRequest": "EthNewPendingTransactionFilter(()),",
+      "upstreamRequest": "EthNewPendingTransactionFilter(Option<bool>),",
       "firstRound": false,
       "unregisteredAliases": []
     },
@@ -1083,6 +1295,82 @@
       "unregisteredAliases": []
     },
     {
+      "method": "debug_getRawReceipts",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "debug_getRawReceipts"
+      ],
+      "upstreamRequest": "DebugGetRawReceipts(BlockId),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_getRawTransactions",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "DebugGetRawTransactions(BlockId),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_getRawHeader",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "debug_getRawHeader"
+      ],
+      "upstreamRequest": "DebugGetRawHeader(BlockId),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_getRawBlock",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "debug_getRawBlock"
+      ],
+      "upstreamRequest": "DebugGetRawBlock(BlockId),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_clearTxpool",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "DebugClearTxpool(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
       "method": "debug_traceTransaction",
       "aliases": [],
       "status": "partial",
@@ -1143,6 +1431,76 @@
       "unregisteredAliases": []
     },
     {
+      "method": "debug_getModifiedAccountsByNumber",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "DebugGetModifiedAccountsByNumber(u64, u64),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_freeOSMemory",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "DebugFreeOsMemory(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_accountInfoAt",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "DebugAccountInfoAt(BlockId, Index, Address),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_executionWitness",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "DebugExecutionWitness(BlockNumber),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "debug_traceBlock",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "DebugTraceBlock(Bytes, #[serde(default)] GethDebugTracingOptions),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
       "method": "debug_traceBlockByHash",
       "aliases": [],
       "status": "partial",
@@ -1175,6 +1533,20 @@
       "unregisteredAliases": []
     },
     {
+      "method": "trace_call",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "TraceCall(\n        WithOtherFields<TransactionRequest>,\n        #[serde(default)] HashSet<TraceType>,\n        #[serde(default)] Option<BlockId>,\n    ),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
       "method": "trace_transaction",
       "aliases": [],
       "status": "unimplemented",
@@ -1198,7 +1570,7 @@
       "limitations": "Not yet differentially certified",
       "tests": [],
       "registeredNames": [],
-      "upstreamRequest": "TraceBlock(BlockNumber),\n\n    // Return filtered traces over blocks",
+      "upstreamRequest": "TraceBlock(BlockNumber),",
       "firstRound": false,
       "unregisteredAliases": []
     },
@@ -1217,6 +1589,20 @@
       "unregisteredAliases": []
     },
     {
+      "method": "trace_get",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "TraceGet(B256, Vec<Index>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
       "method": "trace_replayBlockTransactions",
       "aliases": [],
       "status": "unimplemented",
@@ -1226,7 +1612,77 @@
       "limitations": "Not yet differentially certified",
       "tests": [],
       "registeredNames": [],
-      "upstreamRequest": "TraceReplayBlockTransactions(\n        #[serde(deserialize_with = \"lenient_block_number::lenient_block_number\")] BlockNumber,\n        HashSet<TraceType>,\n    ),\n\n    // Custom endpoints, they're not extracted to a separate type out of serde convenience",
+      "upstreamRequest": "TraceReplayBlockTransactions(\n        #[serde(deserialize_with = \"lenient_block_number::lenient_block_number\")] BlockNumber,\n        HashSet<TraceType>,\n    ),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "trace_replayTransaction",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "TraceReplayTransaction(B256, HashSet<TraceType>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "trace_transactionOpcodeGas",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "TraceTransactionOpcodeGas(B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "trace_blockOpcodeGas",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "TraceBlockOpcodeGas(BlockId),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "trace_rawTransaction",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "TraceRawTransaction(Bytes, HashSet<TraceType>, #[serde(default)] Option<BlockId>),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "trace_callMany",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "TraceCallMany(\n        Vec<(WithOtherFields<TransactionRequest>, HashSet<TraceType>)>,\n        #[serde(default)] Option<BlockId>,\n    ),",
       "firstRound": false,
       "unregisteredAliases": []
     },
@@ -1558,6 +2014,20 @@
       ]
     },
     {
+      "method": "anvil_dealTIP20",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "DealTIP20(Address, Address, #[serde(deserialize_with = \"deserialize_number\")] U256),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
       "method": "anvil_setERC20Allowance",
       "aliases": [],
       "status": "unimplemented",
@@ -1671,6 +2141,20 @@
       "unregisteredAliases": [
         "hardhat_setCoinbase"
       ]
+    },
+    {
+      "method": "anvil_setNextBlockPrevRandao",
+      "aliases": [],
+      "status": "unimplemented",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Not registered",
+      "limitations": "Outside the selected local workflow subset",
+      "tests": [],
+      "registeredNames": [],
+      "upstreamRequest": "SetNextBlockPrevRandao(B256),",
+      "firstRound": false,
+      "unregisteredAliases": []
     },
     {
       "method": "anvil_setChainId",
@@ -1820,7 +2304,7 @@
       "limitations": "Not yet differentially certified",
       "tests": [],
       "registeredNames": [],
-      "upstreamRequest": "AnvilMetadata(()),\n\n    // Ganache compatible calls",
+      "upstreamRequest": "AnvilMetadata(()),",
       "firstRound": false,
       "unregisteredAliases": [
         "hardhat_metadata"
@@ -2021,7 +2505,7 @@
       "parameters": "none",
       "result": "pending/queued address -> decimal nonce -> description",
       "effects": "Read-only",
-      "limitations": "Classification follows ethertest pending candidate and resource limits",
+      "limitations": "Sender keys remain lowercase; Anvil v1.8.3 uses checksummed sender keys",
       "tests": [
         "TestAnvilRuntimeControls",
         "e2e/rpc/anvil.compat.test.mjs"
@@ -2046,6 +2530,22 @@
         "txpool_content"
       ],
       "upstreamRequest": "TxPoolContent(()),",
+      "firstRound": false,
+      "unregisteredAliases": []
+    },
+    {
+      "method": "txpool_contentFrom",
+      "aliases": [],
+      "status": "partial",
+      "parameters": "See upstreamRequest (pinned Rust request declaration)",
+      "result": "Not certified in this first-round subset",
+      "effects": "Existing local implementation; inspect method-specific API documentation",
+      "limitations": "Outside first-round semantic certification; registered names alone do not imply compatibility",
+      "tests": [],
+      "registeredNames": [
+        "txpool_contentFrom"
+      ],
+      "upstreamRequest": "TxPoolContentFrom(Address),",
       "firstRound": false,
       "unregisteredAliases": []
     },
@@ -2330,7 +2830,7 @@
       "limitations": "Outside v0.1 or first-round scope",
       "tests": [],
       "registeredNames": [],
-      "upstreamRequest": "SetFeeAmmLiquidity(\n        /// user_token\n        Address,\n        /// validator_token\n        Address,\n        /// amount\n        #[serde(deserialize_with = \"deserialize_number\")]\n        U256,\n    ),\n}\n\n/// Represents ethereum JSON-RPC API\n#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]\n#[serde(tag = \"method\", content = \"params\")]",
+      "upstreamRequest": "SetFeeAmmLiquidity(\n        /// user_token\n        Address,\n        /// validator_token\n        Address,\n        /// amount\n        #[serde(deserialize_with = \"deserialize_number\")]\n        U256,\n    ),",
       "firstRound": false,
       "unregisteredAliases": []
     }
@@ -2364,7 +2864,7 @@
       "parameters": "filter criteria",
       "result": "log with removed flag",
       "effects": "Read-only bounded live notifications",
-      "limitations": "All canonical rewinds emit removed logs first; Anvil v1.7.1 evm_revert does not emit them",
+      "limitations": "All canonical rewinds emit removed logs first; Anvil v1.8.3 evm_revert does not emit them",
       "tests": [
         "TestAnvilSubscriptions",
         "TestSubscriptionOverflowClosesOnlyAffectedConnection",

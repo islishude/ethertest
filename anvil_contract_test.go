@@ -31,7 +31,7 @@ func TestAnvilContractRegistration(t *testing.T) {
 	if err := json.Unmarshal(data, &matrix); err != nil {
 		t.Fatal(err)
 	}
-	if matrix.Ref != "v1.7.1" || matrix.Commit != "4072e48705af9d93e3c0f6e29e93b5e9a40caed8" || len(matrix.Methods) != 142 {
+	if matrix.Ref != "v1.8.3" || matrix.Commit != "cae51ad458f6abb64852b7709eb784352429825d" || len(matrix.Methods) != 177 {
 		t.Fatal("reference contract drift")
 	}
 	expected := make(map[string]bool)

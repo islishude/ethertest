@@ -1,10 +1,10 @@
 # Anvil development workflow compatibility
 
-The reference is Anvil **v1.7.1**, commit
-`4072e48705af9d93e3c0f6e29e93b5e9a40caed8`. This is a selected local workflow
+The reference is Anvil **v1.8.3**, commit
+`cae51ad458f6abb64852b7709eb784352429825d`. This is a selected local workflow
 subset, not a drop-in Anvil replacement or a release-completeness claim.
 The offline [matrix](../specs/upstream/anvil-compatibility.json) inventories all
-142 primary `EthRequest` methods and their upstream aliases, actual local
+177 primary `EthRequest` methods and their upstream aliases, actual local
 entrypoints, the selected contracts, subscriptions, CLI flags, and evidence.
 It is digest-locked in `spec.lock`; a same-name entry alone is not certification.
 
@@ -23,7 +23,7 @@ It is digest-locked in `spec.lock`; a same-name entry alone is not certification
 | `anvil_dropAllTransactions`, `anvil_removePoolTransactions` | `null` | Clear all or one sender's pool entries, including queued entries |
 | `anvil_setCoinbase` | `null` | Updates runtime beneficiary and the pending view without mining |
 | `anvil_getGenesisTime` | integer seconds | Resolved, including persisted or imported, genesis time |
-| `txpool_inspect` | pending/queued maps | Uses the same candidate classification as other txpool methods |
+| `txpool_inspect` | pending/queued maps | Uses the same candidate classification as other txpool methods; sender keys remain lowercase, while Anvil v1.8.3 uses checksummed keys |
 
 `evm_setAutomine` and `evm_setIntervalMining` are also registered. Disabling
 automine while interval mining is active leaves interval mining active.
@@ -66,8 +66,8 @@ object: `number`, `time`, `gasLimit`, `feeRecipient`, `prevRandao`,
 `baseFeePerGas`, and `blobBaseFee`. Unknown fields are rejected. Every estimate
 trial uses the same overrides; neither method changes canonical state, pending
 state, Beacon projections, revisions, or taint. Existing gas, timeout, and
-response limits apply. `blobBaseFee` is an explicit extension: pinned Anvil
-v1.7.1 ignores that field, whereas ethertest applies it to `BLOBBASEFEE`.
+response limits apply. Like pinned Anvil v1.8.3, `blobBaseFee` overrides the
+value returned by `BLOBBASEFEE`.
 
 HTTP remains request/response; WS, IPC, and in-process subscriptions support
 `newHeads`, `logs`, and `newPendingTransactions`. The latter accepts an optional
@@ -76,7 +76,7 @@ fields remain `null`, even if the accepted transaction is mined or dropped
 before notification delivery.
 
 Canonical rewinds publish removed logs before replacement logs, including
-snapshot revert. **Anvil v1.7.1 `evm_revert` does not emit removed logs**; this
+snapshot revert. **Anvil v1.8.3 `evm_revert` does not emit removed logs**; this
 is an intentional difference required by ethertest's canonical event contract.
 Live notification queues and replay history are bounded by `events.capacity`;
 `limits.max_subscriptions` and response-size limits also apply. Gaps, overflow,
@@ -120,7 +120,7 @@ make test-anvil-compat
 ```
 
 Normal Go tests use offline fixtures and require no Anvil executable. The
-separate differential target requires Anvil v1.7.1 at the pinned commit and
+separate differential target requires Anvil v1.8.3 at the pinned commit and
 cast/viem, and fails rather than skips if the reference is absent. Override its
 paths with `ANVIL`, `CAST`, and `RPC_E2E_BINARY` as needed. It starts disposable
 loopback nodes with matched accounts, chain ID, genesis time, and Osaka rules;

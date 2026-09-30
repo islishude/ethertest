@@ -237,7 +237,7 @@ before(async () => {
     assert(Number.parseInt(process.versions.node, 10) >= 24, 'Node.js 24 or newer is required')
     const castVersion = spawnSync(CAST, ['--version'], { encoding: 'utf8' })
     assert.equal(castVersion.status, 0, castVersion.stderr)
-    assert.match(castVersion.stdout, /cast Version: 1\.7\.1\b/)
+    assert.match(castVersion.stdout, /cast Version: 1\.8\.3\b/)
 
     nodeProcess = spawn(
       BINARY,

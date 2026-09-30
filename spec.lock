@@ -1,5 +1,5 @@
 format = 1
-generated_at = "2026-09-25T00:00:00Z"
+generated_at = "2026-09-30T00:00:00Z"
 
 # Go dependencies are additionally locked by go.mod and go.sum. Normal builds
 # never fetch the specification repositories. spec_lock_test.go verifies every
@@ -87,8 +87,8 @@ generated_sha256 = "279e193f4faa5d9a51b1f02f2381b0fb5c7a2c5234b4cdcc685df0db4a9d
 [[source]]
 name = "anvil-compatibility"
 url = "https://github.com/foundry-rs/foundry"
-ref = "v1.7.1"
-commit = "4072e48705af9d93e3c0f6e29e93b5e9a40caed8"
+ref = "v1.8.3"
+commit = "cae51ad458f6abb64852b7709eb784352429825d"
 kind = "vendored-contract"
 subset = "specs/upstream/anvil-compatibility.json"
-subset_sha256 = "309cb7e763870545c94b5972f4a2ae74cedb313ee9e9d0641080aa7c502d8a32"
+subset_sha256 = "0bf56a4631a3ba5bccc2aa5932782fccb0122dde1c0190aa2a17c7d7a8da85ed"
