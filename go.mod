@@ -11,8 +11,8 @@ require (
 	github.com/golang/snappy v1.0.1-0.20260716114414-9ae09f520e93
 	github.com/gorilla/websocket v1.5.3
 	github.com/holiman/uint256 v1.3.2
-	github.com/klauspost/compress v1.19.2
-	github.com/pk910/dynamic-ssz v1.3.2
+	github.com/klauspost/compress v1.20.1
+	github.com/pk910/dynamic-ssz v1.3.3
 	github.com/protolambda/bls12-381-util v0.1.0
 	github.com/tyler-smith/go-bip32 v1.0.0
 	github.com/tyler-smith/go-bip39 v1.1.0
